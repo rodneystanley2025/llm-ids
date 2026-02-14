@@ -1,7 +1,17 @@
+# IDE files
 .idea/
-.venv/
+.vscode/
+
+# Python
 __pycache__/
 *.pyc
-data/
-*.db
-.env
+*.pyo
+*.pyd
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database (optional for dev)
+data/*.db
