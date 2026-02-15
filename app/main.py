@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from app.schemas import Event
 from app.storage.db import init_db, get_conn, list_sessions, get_session_events
 from datetime import datetime, timezone
-
+from app.scoring.timeline import build_timeline
 
 app = FastAPI(title="LLM-IDS", version="0.1.0")
 
@@ -57,3 +57,10 @@ def session(session_id: str):
 
 def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+@app.get("/v1/timeline/{session_id}")
+def timeline(session_id: str):
+    events = get_session_events(session_id)
+    if not events:
+        raise HTTPException(status_code=404, detail="session_id not found")
+    return {"session_id": session_id, **build_timeline(events)}
