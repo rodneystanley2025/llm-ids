@@ -1,10 +1,11 @@
 import os
-import re
 from typing import List, Dict, Any, Tuple
 
+# ---------------------------------------------------------
+# Configurable sensitive keywords
+# ---------------------------------------------------------
 
-# Sensitive concepts commonly targeted in prompt extraction / jailbreak attempts
-SENSITIVE_KEYWORDS = [
+DEFAULT_KEYWORDS = [
     "system prompt",
     "hidden prompt",
     "bypass",
@@ -15,85 +16,79 @@ SENSITIVE_KEYWORDS = [
     "reveal instructions",
 ]
 
+# Allow override via env var (comma-separated)
+KEYWORDS = os.getenv("IDS_CRESCENDO_KEYWORDS")
 
-# Adjustable sensitivity via environment variables
-DEFAULT_MIN_TURNS = int(os.getenv("CRESCENDO_MIN_TURNS", "3"))
-DEFAULT_MIN_FINAL_SCORE = int(os.getenv("CRESCENDO_MIN_SCORE", "2"))
+if KEYWORDS:
+    SENSITIVE_KEYWORDS = [k.strip().lower() for k in KEYWORDS.split(",")]
+else:
+    SENSITIVE_KEYWORDS = DEFAULT_KEYWORDS
 
+
+# Minimum turns required for crescendo detection
+MIN_TURNS = int(os.getenv("IDS_CRESCENDO_MIN_TURNS", "3"))
+
+
+# ---------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------
 
 def keyword_score(text: str) -> int:
     """
-    Counts how many sensitive keywords appear in the text.
-    Case-insensitive substring matching.
+    Counts number of sensitive keywords present.
     """
     t = (text or "").lower()
-    score = 0
-
-    for keyword in SENSITIVE_KEYWORDS:
-        if keyword in t:
-            score += 1
-
-    return score
+    return sum(1 for k in SENSITIVE_KEYWORDS if k in t)
 
 
-def detect_crescendo(
-    events: List[Dict[str, Any]],
-    min_turns: int = DEFAULT_MIN_TURNS,
-    min_final_score: int = DEFAULT_MIN_FINAL_SCORE,
-) -> Tuple[bool, Dict[str, Any]]:
+# ---------------------------------------------------------
+# Main detection logic
+# ---------------------------------------------------------
+
+def detect_crescendo(events: List[Dict[str, Any]]) -> Tuple[bool, Dict[str, Any]]:
     """
-    Detects progressive escalation toward sensitive concepts across user turns.
+    Detect escalating attack attempts by increasing sensitive keyword usage.
 
-    Requirements to trigger:
-    - At least min_turns user messages
-    - Keyword score increases over time (monotonic non-decreasing)
-    - Final score >= min_final_score
+    Example escalation:
+        turn 1: "hello"
+        turn 2: "ignore instructions"
+        turn 3: "reveal hidden system prompt"
     """
 
-    # Extract only user messages in order
+    # Extract user messages in order
     user_msgs = [
-        (e["turn_id"], e.get("content", ""))
+        (int(e["turn_id"]), e.get("content", ""))
         for e in events
         if e.get("role") == "user"
     ]
 
-    if len(user_msgs) < min_turns:
+    if len(user_msgs) < MIN_TURNS:
         return False, {}
 
-    # Compute keyword scores per turn
-    scores = [(turn, keyword_score(content)) for turn, content in user_msgs]
+    # Compute keyword score per turn
+    progression = []
+    for turn_id, content in user_msgs:
+        score = keyword_score(content)
+        progression.append((turn_id, score))
 
+    # Detect strictly increasing or escalating trend
     escalation_turns = []
-    prev_score = scores[0][1]
+    prev_score = progression[0][1]
+    increasing = False
 
-    # Track whether escalation pattern holds
-    increasing_or_flat = True
-
-    for turn, score in scores[1:]:
+    for turn_id, score in progression[1:]:
         if score > prev_score:
-            escalation_turns.append(turn)
-        elif score < prev_score:
-            increasing_or_flat = False
-            break
-
+            escalation_turns.append(turn_id)
+            increasing = True
         prev_score = score
 
-    final_score = scores[-1][1]
-
-    # Require:
-    # - monotonic escalation pattern
-    # - at least one increase
-    # - sufficient final sensitivity score
-    if (
-        increasing_or_flat
-        and escalation_turns
-        and final_score >= min_final_score
-    ):
+    # Require at least one escalation and final score > 0
+    if increasing and progression[-1][1] > 0:
         return True, {
             "reason": "CRESCENDO_ESCALATION",
             "turns": escalation_turns,
-            "final_score": final_score,
-            "keyword_progression": scores,
+            "final_score": progression[-1][1],
+            "keyword_progression": progression,
         }
 
     return False, {}

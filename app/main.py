@@ -2,21 +2,9 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 
 from app.schemas import Event
-from app.storage.db import (
-    init_db,
-    get_conn,
-    list_sessions,
-    get_session_events,
-    insert_alert,
-    list_alerts,
-    get_alerts_for_session,
-)
-
-from app.scoring.engine import score_session, config_snapshot
-
-
-app = FastAPI(title="LLM-IDS", version="0.3.0")
-
+from app.storage.db import init_db, get_conn, list_sessions, get_session_events
+from datetime import datetime, timezone
+from app.scoring.timeline import build_timeline
 
 # ---------------------------------------------------------
 # Utilities
@@ -162,18 +150,12 @@ def score(session_id: str):
     if not events:
         raise HTTPException(status_code=404, detail="session_id not found")
 
-    result = score_session(events)
+def utc_now_iso():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-    return {
-        "session_id": session_id,
-        **result,
-    }
-
-
-# ---------------------------------------------------------
-# Config endpoint (shows runtime IDS settings)
-# ---------------------------------------------------------
-
-@app.get("/v1/config")
-def config():
-    return config_snapshot()
+@app.get("/v1/timeline/{session_id}")
+def timeline(session_id: str):
+    events = get_session_events(session_id)
+    if not events:
+        raise HTTPException(status_code=404, detail="session_id not found")
+    return {"session_id": session_id, **build_timeline(events)}
