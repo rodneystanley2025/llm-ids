@@ -168,10 +168,10 @@ def alerts_for_session(session_id: str):
 @app.get("/v1/score/{session_id}")
 def score(session_id: str):
     events = get_session_events(session_id)
-
     if not events:
         raise HTTPException(status_code=404, detail="session_id not found")
-
+    result = score_session(events)
+    return {"session_id": session_id, **result}
 
 # ---------------------------------------------------------
 # Alert endpoints
