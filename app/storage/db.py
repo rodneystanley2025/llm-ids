@@ -49,6 +49,12 @@ def init_db() -> None:
     )
     """)
 
+    # Dedupe alerts: same session + type + evidence shouldn't spam
+    conn.execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_alerts_session_type_evidence
+    ON alerts(session_id, alert_type, evidence)
+    """)
+
     conn.commit()
     conn.close()
 
@@ -94,12 +100,12 @@ def insert_alert(
     severity: str,
     confidence: float,
     reasons: list,
-    evidence: dict
+    evidence: dict,
 ) -> None:
     conn = get_conn()
     conn.execute(
         """
-        INSERT INTO alerts (session_id, ts, alert_type, severity, confidence, reasons, evidence)
+        INSERT OR IGNORE INTO alerts (session_id, ts, alert_type, severity, confidence, reasons, evidence)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
