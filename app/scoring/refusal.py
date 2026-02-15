@@ -1,4 +1,5 @@
 import re
+import os
 from typing import List, Dict, Any, Tuple
 
 REFUSAL_PATTERNS = [
@@ -24,8 +25,8 @@ def token_jaccard(a: str, b: str) -> float:
 
 def detect_refusal_rephrase(
     events: List[Dict[str, Any]],
-    window_turns: int = 2,
-    sim_threshold: float = 0.35
+    window_turns: int = int(os.getenv("REFUSAL_WINDOW_TURNS", "2")),
+    sim_threshold: float = float(os.getenv("REFUSAL_SIM_THRESHOLD", "0.35")),
 ) -> Tuple[bool, Dict[str, Any]]:
 
     by_turn = {}
