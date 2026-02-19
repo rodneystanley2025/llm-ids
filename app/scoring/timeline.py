@@ -1,36 +1,53 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
+
 from app.scoring.engine import score_session
+from app.scoring.features import group_by_turn
+
 
 def build_timeline(events: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Builds a per-turn timeline and a simple risk progression.
-    We score the session incrementally turn-by-turn.
-    """
-    # Group events by turn_id (already ordered in DB, but be safe)
-    by_turn: Dict[int, List[Dict[str, Any]]] = {}
-    for e in events:
-        by_turn.setdefault(int(e["turn_id"]), []).append(e)
-
+    by_turn = group_by_turn(events)
     turn_ids = sorted(by_turn.keys())
 
-    # Build a flat, ordered event list up to each turn for incremental scoring
     ordered_events: List[Dict[str, Any]] = []
     risk_points: List[Dict[str, Any]] = []
     turns: List[Dict[str, Any]] = []
 
+    prev_score = 0
+    prev_labels: Set[str] = set()
+    prev_reasons: Set[str] = set()
+
     for t in turn_ids:
         # Add this turn’s events to the running history
-        for e in sorted(by_turn[t], key=lambda x: int(x["id"])):
+        for e in by_turn[t]:
             ordered_events.append(e)
 
-        # Score up to this turn
         result = score_session(ordered_events)
+
+        labels = result.get("labels", []) or []
+        reasons = result.get("reasons", []) or []
+
+        label_set = set(labels)
+        reason_set = set(reasons)
+
+        new_labels = sorted(list(label_set - prev_labels))
+        new_reasons = sorted(list(reason_set - prev_reasons))
+
+        score = int(result.get("score", 0) or 0)
+        score_delta = score - prev_score
+
+        # Very small “SOC-ish” summary
+        top_reason = new_reasons[0] if new_reasons else (reasons[0] if reasons else "")
 
         risk_points.append({
             "turn_id": t,
-            "score": result["score"],
-            "severity": result["severity"],
-            "labels": result["labels"],
+            "score": score,
+            "score_delta": score_delta,
+            "severity": result.get("severity", "NONE"),
+            "labels": labels,
+            "new_labels": new_labels,
+            "reasons": reasons,
+            "new_reasons": new_reasons,
+            "top_reason": top_reason,
         })
 
         turns.append({
@@ -38,7 +55,10 @@ def build_timeline(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             "events": by_turn[t],
         })
 
-    # Last score = current session score
+        prev_score = score
+        prev_labels = label_set
+        prev_reasons = reason_set
+
     final = score_session(ordered_events) if ordered_events else {
         "score": 0, "severity": "NONE", "labels": [], "reasons": [], "evidence": {}
     }
