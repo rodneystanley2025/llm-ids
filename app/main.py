@@ -15,6 +15,7 @@ from app.scoring.engine import score_session, config_snapshot
 from app.scoring.timeline import build_timeline
 
 app = FastAPI(title="LLM-IDS", version="0.4.0")
+from app.storage.db import delete_session  # add to imports
 
 
 # ---------------------------------------------------------
@@ -214,3 +215,8 @@ def timeline(session_id: str):
 @app.get("/v1/config")
 def config():
     return config_snapshot()
+
+@app.delete("/v1/sessions/{session_id}")
+def delete_session_endpoint(session_id: str):
+    deleted = delete_session(session_id)
+    return {"session_id": session_id, "deleted": deleted}

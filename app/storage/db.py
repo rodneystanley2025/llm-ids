@@ -6,6 +6,9 @@ import json
 DB_PATH = Path("/data/llm_ids.db")
 
 
+# ---------------------------------------------------------
+# Connection
+# ---------------------------------------------------------
 def get_conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -13,52 +16,66 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+# ---------------------------------------------------------
+# Initialization
+# ---------------------------------------------------------
 def init_db() -> None:
     conn = get_conn()
 
     # Events table
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        turn_id INTEGER NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        ts TEXT,
-        model TEXT
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            turn_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            ts TEXT,
+            model TEXT
+        )
+        """
     )
-    """)
 
-    # Prevent duplicates for the same turn+role within a session
-    conn.execute("""
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_events_session_turn_role
-    ON events(session_id, turn_id, role)
-    """)
+    # Prevent duplicates for same session + turn + role
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_events_session_turn_role
+        ON events(session_id, turn_id, role)
+        """
+    )
 
     # Alerts table
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS alerts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        ts TEXT NOT NULL,
-        alert_type TEXT NOT NULL,
-        severity TEXT NOT NULL,
-        confidence REAL NOT NULL,
-        reasons TEXT NOT NULL,     -- JSON string
-        evidence TEXT NOT NULL     -- JSON string
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            alert_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            reasons TEXT NOT NULL,   -- JSON string
+            evidence TEXT NOT NULL   -- JSON string
+        )
+        """
     )
-    """)
 
-    # Dedupe alerts: same session + type + evidence shouldn't spam
-    conn.execute("""
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_alerts_session_type_evidence
-    ON alerts(session_id, alert_type, evidence)
-    """)
+    # Prevent alert spam (same session + type + evidence)
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_alerts_session_type_evidence
+        ON alerts(session_id, alert_type, evidence)
+        """
+    )
 
     conn.commit()
     conn.close()
 
 
+# ---------------------------------------------------------
+# Session Queries
+# ---------------------------------------------------------
 def list_sessions(limit: int = 50) -> List[Dict[str, Any]]:
     conn = get_conn()
     rows = conn.execute(
@@ -72,7 +89,7 @@ def list_sessions(limit: int = 50) -> List[Dict[str, Any]]:
         ORDER BY last_ts DESC
         LIMIT ?
         """,
-        (limit,)
+        (limit,),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -87,12 +104,38 @@ def get_session_events(session_id: str) -> List[Dict[str, Any]]:
         WHERE session_id = ?
         ORDER BY turn_id ASC, id ASC
         """,
-        (session_id,)
+        (session_id,),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
+def delete_session(session_id: str) -> int:
+    """
+    Deletes all events and alerts for a session.
+    Returns number of rows deleted.
+    """
+    conn = get_conn()
+
+    cur1 = conn.execute(
+        "DELETE FROM alerts WHERE session_id = ?",
+        (session_id,),
+    )
+
+    cur2 = conn.execute(
+        "DELETE FROM events WHERE session_id = ?",
+        (session_id,),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return cur1.rowcount + cur2.rowcount
+
+
+# ---------------------------------------------------------
+# Alerts
+# ---------------------------------------------------------
 def insert_alert(
     session_id: str,
     ts: str,
@@ -103,9 +146,11 @@ def insert_alert(
     evidence: dict,
 ) -> None:
     conn = get_conn()
+
     conn.execute(
         """
-        INSERT OR IGNORE INTO alerts (session_id, ts, alert_type, severity, confidence, reasons, evidence)
+        INSERT OR IGNORE INTO alerts
+        (session_id, ts, alert_type, severity, confidence, reasons, evidence)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
@@ -116,8 +161,9 @@ def insert_alert(
             float(confidence),
             json.dumps(reasons),
             json.dumps(evidence),
-        )
+        ),
     )
+
     conn.commit()
     conn.close()
 
@@ -126,27 +172,46 @@ def list_alerts(limit: int = 50) -> List[Dict[str, Any]]:
     conn = get_conn()
     rows = conn.execute(
         """
-        SELECT id, session_id, ts, alert_type, severity, confidence, reasons, evidence
+        SELECT id, session_id, ts, alert_type, severity,
+               confidence, reasons, evidence
         FROM alerts
         ORDER BY id DESC
         LIMIT ?
         """,
-        (limit,)
+        (limit,),
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+
+    results = []
+    for r in rows:
+        row = dict(r)
+        # Decode JSON fields for cleaner API output
+        row["reasons"] = json.loads(row["reasons"])
+        row["evidence"] = json.loads(row["evidence"])
+        results.append(row)
+
+    return results
 
 
 def get_alerts_for_session(session_id: str) -> List[Dict[str, Any]]:
     conn = get_conn()
     rows = conn.execute(
         """
-        SELECT id, session_id, ts, alert_type, severity, confidence, reasons, evidence
+        SELECT id, session_id, ts, alert_type, severity,
+               confidence, reasons, evidence
         FROM alerts
         WHERE session_id = ?
         ORDER BY id DESC
         """,
-        (session_id,)
+        (session_id,),
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+
+    results = []
+    for r in rows:
+        row = dict(r)
+        row["reasons"] = json.loads(row["reasons"])
+        row["evidence"] = json.loads(row["evidence"])
+        results.append(row)
+
+    return results

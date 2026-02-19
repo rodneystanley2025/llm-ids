@@ -2,6 +2,17 @@ import os
 import re
 from typing import Any, Dict, List, Tuple, Optional
 
+def normalize_text(text: str) -> str:
+    t = (text or "").lower()
+    # normalize curly quotes/apostrophes/dashes → ascii
+    return (
+        t.replace("\u2019", "'")
+         .replace("\u2018", "'")
+         .replace("\u201c", '"')
+         .replace("\u201d", '"')
+         .replace("\u2014", "-")
+         .replace("\u2013", "-")
+    )
 
 # -----------------------------
 # Tunables (env vars)
@@ -40,7 +51,7 @@ REPHRASE_WINDOW_TURNS = int(os.getenv("REFUSAL_WINDOW_TURNS", "2"))
 # Text helpers
 # -----------------------------
 def _tokens(text: str) -> List[str]:
-    return re.findall(r"[a-z0-9']+", (text or "").lower())
+    return re.findall(r"[a-z0-9']+", normalize_text(text))
 
 
 def jaccard(a: str, b: str) -> float:
@@ -52,12 +63,12 @@ def jaccard(a: str, b: str) -> float:
 
 
 def keyword_count(text: str) -> int:
-    t = (text or "").lower()
+    t = normalize_text(text)
     return sum(1 for k in SENSITIVE_KEYWORDS if k in t)
 
 
 def is_refusal(text: str) -> bool:
-    t = (text or "").lower()
+    t = normalize_text(text)
     return any(re.search(p, t) for p in REFUSAL_PATTERNS)
 
 
