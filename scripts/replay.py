@@ -26,13 +26,12 @@ def delete_session(base_url: str, session_id: str) -> None:
 
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line:
             continue
         events.append(json.loads(line))
     return events
-
 
 def main() -> int:
     ap = argparse.ArgumentParser()
