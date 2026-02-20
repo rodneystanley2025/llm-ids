@@ -2,6 +2,7 @@ import os
 import re
 from typing import Any, Dict, List, Tuple, Optional
 
+
 def normalize_text(text: str) -> str:
     t = (text or "").lower()
     # normalize curly quotes/apostrophes/dashes → ascii
@@ -13,6 +14,7 @@ def normalize_text(text: str) -> str:
          .replace("\u2014", "-")
          .replace("\u2013", "-")
     )
+
 
 # -----------------------------
 # Tunables (env vars)
@@ -163,21 +165,27 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             if checked >= REPHRASE_WINDOW_TURNS:
                 break
 
-    # Crescendo-like “growth”: keyword_count per user turn and monotonic increases
+    # Crescendo-like “growth”: keyword_count per user turn and increases
     user_progression: List[Tuple[int, int]] = []
     for t in turn_ids:
         umsgs = [e for e in by_turn[t] if e.get("role") == "user"]
         if not umsgs:
             continue
-        # score this turn by last user msg (simple, deterministic)
         user_progression.append((t, keyword_count(umsgs[-1].get("content", ""))))
 
     increases: List[int] = []
+    user_keyword_deltas: List[Tuple[int, int]] = []  # (turn_id, delta vs previous user turn)
+    max_user_keyword_delta = 0
+
     if user_progression:
         prev = user_progression[0][1]
         for t, s in user_progression[1:]:
-            if s > prev:
+            delta = s - prev
+            user_keyword_deltas.append((t, delta))
+            if delta > 0:
                 increases.append(t)
+            if delta > max_user_keyword_delta:
+                max_user_keyword_delta = delta
             prev = s
 
     return {
@@ -193,6 +201,9 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "sensitive_keyword_total": total_sensitive_kw,
         "user_keyword_progression": user_progression,
         "user_keyword_increase_turns": increases,
+        # NEW (for velocity)
+        "user_keyword_deltas": user_keyword_deltas,
+        "max_user_keyword_delta": max_user_keyword_delta,
     }
 
 
