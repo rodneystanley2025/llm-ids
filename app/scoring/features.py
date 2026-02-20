@@ -2,17 +2,6 @@ import os
 import re
 from typing import Any, Dict, List, Tuple, Optional
 
-def normalize_text(text: str) -> str:
-    t = (text or "").lower()
-    # normalize curly quotes/apostrophes/dashes → ascii
-    return (
-        t.replace("\u2019", "'")
-         .replace("\u2018", "'")
-         .replace("\u201c", '"')
-         .replace("\u201d", '"')
-         .replace("\u2014", "-")
-         .replace("\u2013", "-")
-    )
 
 # -----------------------------
 # Tunables (env vars)
@@ -48,6 +37,21 @@ REPHRASE_WINDOW_TURNS = int(os.getenv("REFUSAL_WINDOW_TURNS", "2"))
 
 
 # -----------------------------
+# Normalization (prevents unicode quote bypasses)
+# -----------------------------
+def normalize_text(text: str) -> str:
+    t = (text or "").lower()
+    return (
+        t.replace("\u2019", "'")
+         .replace("\u2018", "'")
+         .replace("\u201c", '"')
+         .replace("\u201d", '"')
+         .replace("\u2014", "-")
+         .replace("\u2013", "-")
+    )
+
+
+# -----------------------------
 # Text helpers
 # -----------------------------
 def _tokens(text: str) -> List[str]:
@@ -79,7 +83,6 @@ def group_by_turn(events: List[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]
     by_turn: Dict[int, List[Dict[str, Any]]] = {}
     for e in events:
         by_turn.setdefault(int(e["turn_id"]), []).append(e)
-    # Ensure stable ordering inside each turn
     for t in by_turn:
         by_turn[t] = sorted(by_turn[t], key=lambda x: int(x.get("id", 0)))
     return by_turn
@@ -136,11 +139,10 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         if any(e.get("role") == "assistant" for e in by_turn[t]):
             assistant_turns += 1
 
-        # refusal if any assistant msg in this turn looks like a refusal
         if any(e.get("role") == "assistant" and is_refusal(e.get("content", "")) for e in by_turn[t]):
             refusal_turn_ids.append(t)
 
-    # Rephrase-after-refusal detection (feature-level)
+    # Rephrase-after-refusal detection
     rephrase_hits: List[Dict[str, Any]] = []
     for refusal_turn in refusal_turn_ids:
         prev_user = _last_user_before(by_turn, refusal_turn)
@@ -163,22 +165,29 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             if checked >= REPHRASE_WINDOW_TURNS:
                 break
 
-    # Crescendo-like “growth”: keyword_count per user turn and monotonic increases
+    # Keyword progression per user turn
     user_progression: List[Tuple[int, int]] = []
     for t in turn_ids:
         umsgs = [e for e in by_turn[t] if e.get("role") == "user"]
         if not umsgs:
             continue
-        # score this turn by last user msg (simple, deterministic)
         user_progression.append((t, keyword_count(umsgs[-1].get("content", ""))))
 
+    # Turns where keyword score increased
     increases: List[int] = []
+    user_keyword_deltas: List[Tuple[int, int]] = []  # (turn_id, delta vs previous user turn)
+    max_keyword_delta = 0
+
     if user_progression:
-        prev = user_progression[0][1]
-        for t, s in user_progression[1:]:
-            if s > prev:
-                increases.append(t)
-            prev = s
+        prev_score = user_progression[0][1]
+        for turn_id, score in user_progression[1:]:
+            delta = score - prev_score
+            user_keyword_deltas.append((turn_id, delta))
+            if delta > 0:
+                increases.append(turn_id)
+            if delta > max_keyword_delta:
+                max_keyword_delta = delta
+            prev_score = score
 
     return {
         "turn_count": len(turn_ids),
@@ -189,10 +198,13 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "refusal_count": len(refusal_turn_ids),
         "refusal_turn_ids": refusal_turn_ids,
         "rephrase_count": len(rephrase_hits),
-        "rephrase_hits": rephrase_hits,  # evidence-ready
+        "rephrase_hits": rephrase_hits,
         "sensitive_keyword_total": total_sensitive_kw,
         "user_keyword_progression": user_progression,
         "user_keyword_increase_turns": increases,
+        # NEW: velocity-friendly features
+        "user_keyword_deltas": user_keyword_deltas,
+        "max_user_keyword_delta": max_keyword_delta,
     }
 
 
