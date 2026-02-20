@@ -59,6 +59,12 @@ jobs:
             --expect-severity LOW \
             --expect-label REFUSAL_REPHRASE
 
+          python scripts/replay.py --base-url http://localhost:8000 --wipe \
+            --session-id replay_velocity \
+            --jsonl scripts/samples/velocity.jsonl \
+            --expect-label RISK_VELOCITY
+
+
       - name: Show logs if something failed
         if: failure()
         run: |
