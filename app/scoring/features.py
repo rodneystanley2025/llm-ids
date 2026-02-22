@@ -8,11 +8,11 @@ def normalize_text(text: str) -> str:
     # normalize curly quotes/apostrophes/dashes → ascii
     return (
         t.replace("\u2019", "'")
-         .replace("\u2018", "'")
-         .replace("\u201c", '"')
-         .replace("\u201d", '"')
-         .replace("\u2014", "-")
-         .replace("\u2013", "-")
+        .replace("\u2018", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2014", "-")
+        .replace("\u2013", "-")
     )
 
 
@@ -81,6 +81,7 @@ def group_by_turn(events: List[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]
     by_turn: Dict[int, List[Dict[str, Any]]] = {}
     for e in events:
         by_turn.setdefault(int(e["turn_id"]), []).append(e)
+
     # Ensure stable ordering inside each turn
     for t in by_turn:
         by_turn[t] = sorted(by_turn[t], key=lambda x: int(x.get("id", 0)))
@@ -118,9 +119,24 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     assistant_turns = 0
     user_msgs = 0
     assistant_msgs = 0
-
     refusal_turn_ids: List[int] = []
     total_sensitive_kw = 0
+
+    # ---- NEW: raw text feature (for direct prompt attack detector) ----
+    last_user_content = ""
+    for t in reversed(turn_ids):
+        umsgs = [e for e in by_turn[t] if e.get("role") == "user"]
+        if umsgs:
+            last_user_content = umsgs[-1].get("content", "") or ""
+            break
+
+    # (Optional but useful: full session user text)
+    all_user_content = "\n".join(
+        (e.get("content", "") or "")
+        for t in turn_ids
+        for e in by_turn[t]
+        if e.get("role") == "user"
+    )
 
     # Basic counts + refusal turns + keyword totals
     for t in turn_ids:
@@ -130,7 +146,6 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
                 user_msgs += 1
             elif role == "assistant":
                 assistant_msgs += 1
-
             total_sensitive_kw += keyword_count(e.get("content", ""))
 
         if any(e.get("role") == "user" for e in by_turn[t]):
@@ -139,7 +154,10 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             assistant_turns += 1
 
         # refusal if any assistant msg in this turn looks like a refusal
-        if any(e.get("role") == "assistant" and is_refusal(e.get("content", "")) for e in by_turn[t]):
+        if any(
+            e.get("role") == "assistant" and is_refusal(e.get("content", ""))
+            for e in by_turn[t]
+        ):
             refusal_turn_ids.append(t)
 
     # Rephrase-after-refusal detection (feature-level)
@@ -155,12 +173,14 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             sim = jaccard(prev_user_text, next_user_text)
             checked += 1
             if sim >= REPHRASE_SIM_THRESHOLD:
-                rephrase_hits.append({
-                    "original_turn": prev_user_turn,
-                    "refusal_turn": refusal_turn,
-                    "rephrase_turn": next_turn,
-                    "similarity": round(sim, 3),
-                })
+                rephrase_hits.append(
+                    {
+                        "original_turn": prev_user_turn,
+                        "refusal_turn": refusal_turn,
+                        "rephrase_turn": next_turn,
+                        "similarity": round(sim, 3),
+                    }
+                )
                 break
             if checked >= REPHRASE_WINDOW_TURNS:
                 break
@@ -197,13 +217,17 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "refusal_count": len(refusal_turn_ids),
         "refusal_turn_ids": refusal_turn_ids,
         "rephrase_count": len(rephrase_hits),
-        "rephrase_hits": rephrase_hits,  # evidence-ready
+        "rephrase_hits": rephrase_hits,
+        # evidence-ready
         "sensitive_keyword_total": total_sensitive_kw,
         "user_keyword_progression": user_progression,
         "user_keyword_increase_turns": increases,
-        # NEW (for velocity)
+        # for velocity
         "user_keyword_deltas": user_keyword_deltas,
         "max_user_keyword_delta": max_user_keyword_delta,
+        # NEW: raw text features for rules
+        "last_user_content": last_user_content,
+        "all_user_content": all_user_content,
     }
 
 
@@ -213,19 +237,19 @@ def compute_turn_features(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     by_turn = group_by_turn(events)
     out: List[Dict[str, Any]] = []
-
     for t in sorted(by_turn.keys()):
         turn_events = by_turn[t]
         user_texts = [e.get("content", "") for e in turn_events if e.get("role") == "user"]
         assistant_texts = [e.get("content", "") for e in turn_events if e.get("role") == "assistant"]
 
-        out.append({
-            "turn_id": t,
-            "has_user": bool(user_texts),
-            "has_assistant": bool(assistant_texts),
-            "user_sensitive_kw": keyword_count(user_texts[-1]) if user_texts else 0,
-            "assistant_refusal": any(is_refusal(x) for x in assistant_texts),
-            "events": turn_events,
-        })
-
+        out.append(
+            {
+                "turn_id": t,
+                "has_user": bool(user_texts),
+                "has_assistant": bool(assistant_texts),
+                "user_sensitive_kw": keyword_count(user_texts[-1]) if user_texts else 0,
+                "assistant_refusal": any(is_refusal(x) for x in assistant_texts),
+                "events": turn_events,
+            }
+        )
     return out

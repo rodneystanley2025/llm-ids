@@ -1,17 +1,15 @@
-# IDE files
-.idea/
-.vscode/
-
-# Python
+.venv/
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.venv/
 
-# OS
-.DS_Store
-Thumbs.db
+data/
+*.db
 
-# Database (optional for dev)
-data/*.db
+.env
+
+.vscode/
+.idea/
+
+node_modules/
+
+*.log
