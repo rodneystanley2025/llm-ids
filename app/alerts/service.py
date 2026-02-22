@@ -8,7 +8,7 @@ ALERT_THRESHOLD = int(os.getenv("IDS_ALERT_THRESHOLD", "80"))
 
 def maybe_emit_alert(session_id: str, score_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    score_result should be the dict returned by score_session().
+    score_result should be the dict returned by score_session() OR the timeline's "final".
     """
     return create_alert_if_needed(
         session_id=session_id,
@@ -17,4 +17,6 @@ def maybe_emit_alert(session_id: str, score_result: Dict[str, Any]) -> Optional[
         labels=list(score_result.get("labels", [])),
         reasons=list(score_result.get("reasons", [])),
         threshold=ALERT_THRESHOLD,
+        evidence=dict(score_result.get("evidence", {}) or {}),
+        timeline_url=f"/v1/timeline/{session_id}",
     )

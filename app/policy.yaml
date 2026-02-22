@@ -1,0 +1,16 @@
+# LLM-IDS Gateway Policy (editable)
+inbound:
+  # If true, we redact PII before sending to the LLM (recommended)
+  redact_pii_before_llm: true
+  # If false, we do NOT call the downstream LLM when decision=block
+  allow_llm_on_block: false
+  # If false, we do NOT store raw PII in DB (optional; requires small storage change later)
+  allow_store_raw_pii: false
+
+outbound:
+  # If true, redact PII from model output before returning to user
+  redact_pii_in_output: true
+
+messages:
+  block_default: "I can’t help with that request. I can explain safe alternatives if you want."
+  pii_block: "I can’t help with sharing sensitive personal information. Please remove it and try again."

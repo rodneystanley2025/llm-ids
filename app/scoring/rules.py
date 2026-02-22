@@ -67,3 +67,19 @@ def rule_risk_velocity(features: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
         "keyword_progression": features.get("user_keyword_progression", []),
         "keyword_deltas": deltas,
     }
+
+DIRECT_ATTACK_MIN_KEYWORDS = int(
+    os.getenv("IDS_DIRECT_ATTACK_MIN_KEYWORDS", "2")
+)
+
+
+def rule_direct_prompt_attack(features: Dict[str, Any]):
+    total_kw = features.get("sensitive_keyword_total", 0)
+
+    if total_kw >= DIRECT_ATTACK_MIN_KEYWORDS:
+        return True, {
+            "reason": "DIRECT_PROMPT_ATTACK",
+            "keyword_total": total_kw,
+        }
+
+    return False, {}
