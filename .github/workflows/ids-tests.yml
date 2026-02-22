@@ -25,9 +25,19 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install requests
 
+      - name: Debug (prove which commit + which scoring code)
+        run: |
+          git rev-parse HEAD
+          python -c "import app.scoring.rules as r, inspect; s=inspect.getsource(r.rule_direct_prompt_attack); print('has_anchor' in s, 'scanned_text' in s)"
+          python -c "import app.scoring.engine as e; print('VELOCITY_MIN_KEYWORD_DELTA=', getattr(e, 'VELOCITY_MIN_KEYWORD_DELTA', None))"
+
+      - name: Clean up any old containers
+        run: |
+          docker compose down -v || true
+
       - name: Start API (docker compose)
         run: |
-          docker compose up -d --build
+          docker compose up -d --build --force-recreate
 
       - name: Wait for API health
         run: |
