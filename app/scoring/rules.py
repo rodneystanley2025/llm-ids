@@ -1,23 +1,26 @@
+from __future__ import annotations
+
 import os
 import re
 from typing import Any, Dict, List, Tuple
 
+from app.scoring.config import load_scoring_config
 
-# Thresholds are read in engine.py too (but rules can use defaults safely)
-REFUSAL_MIN_REPHRASES = int(os.getenv("IDS_REFUSAL_MIN_REPHRASES", "1"))
-
-CRESCENDO_MIN_INCREASES = int(os.getenv("IDS_CRESCENDO_MIN_INCREASES", "1"))
-CRESCENDO_MIN_FINAL_SCORE = int(os.getenv("IDS_CRESCENDO_MIN_FINAL_SCORE", "2"))
-
-# IMPORTANT: default bumped so "crescendo" sample (delta ~3) does NOT trigger velocity
-VELOCITY_MIN_KEYWORD_DELTA = int(os.getenv("IDS_VELOCITY_MIN_KEYWORD_DELTA", "5"))
-VELOCITY_MIN_INCREASE_TURNS = int(os.getenv("IDS_VELOCITY_MIN_INCREASE_TURNS", "2"))
-
-DIRECT_ATTACK_MIN_KEYWORDS = int(os.getenv("IDS_DIRECT_ATTACK_MIN_KEYWORDS", "2"))
+# Load scoring config (same file used by engine.py)
+CFG = load_scoring_config()
 
 
-# Keep this detector NARROW so it doesn't collide with crescendo keywords.
-# You can override via env var if desired.
+def _t(name: str, default: int) -> int:
+    """Threshold helper."""
+    try:
+        return int(CFG.thresholds.get(name, default))
+    except Exception:
+        return default
+
+
+# -----------------------------
+# Direct prompt attack patterns
+# -----------------------------
 DEFAULT_DIRECT_ATTACK_PATTERNS = [
     r"\bjailbreak\b",
     r"\bprompt injection\b",
@@ -47,11 +50,14 @@ def _norm(text: str) -> str:
 # Rule 1: Refusal -> rephrase loop
 # ---------------------------------------------------------
 def rule_refusal_rephrase(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+    min_rephrases = _t("refusal_min_rephrases", 1)
+
     hits = feats.get("rephrase_hits", []) or []
-    hit = len(hits) >= REFUSAL_MIN_REPHRASES
+    hit = len(hits) >= min_rephrases
+
     ev = {
         "reason": "REFUSAL_EVASION_LOOP",
-        "min_rephrases": REFUSAL_MIN_REPHRASES,
+        "min_rephrases": min_rephrases,
         "hit_count": len(hits),
         "hits": hits,
     }
@@ -62,22 +68,22 @@ def rule_refusal_rephrase(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
 # Rule 2: Crescendo escalation (keyword growth)
 # ---------------------------------------------------------
 def rule_crescendo(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+    min_increases = _t("crescendo_min_increases", 1)
+    min_final_score = _t("crescendo_min_final_score", 2)
+
     progression = feats.get("user_keyword_progression", []) or []
     increases = feats.get("user_keyword_increase_turns", []) or []
 
-    final_score = 0
-    if progression:
-        final_score = int(progression[-1][1])
-
-    hit = (len(increases) >= CRESCENDO_MIN_INCREASES) and (final_score >= CRESCENDO_MIN_FINAL_SCORE)
+    final_score = int(progression[-1][1]) if progression else 0
+    hit = (len(increases) >= min_increases) and (final_score >= min_final_score)
 
     ev = {
         "reason": "CRESCENDO_ESCALATION",
         "turns": increases,
         "final_score": final_score,
         "keyword_progression": progression,
-        "min_increases": CRESCENDO_MIN_INCREASES,
-        "min_final_score": CRESCENDO_MIN_FINAL_SCORE,
+        "min_increases": min_increases,
+        "min_final_score": min_final_score,
     }
     return hit, ev
 
@@ -86,6 +92,9 @@ def rule_crescendo(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
 # Rule 3: Risk velocity (sudden spike)
 # ---------------------------------------------------------
 def rule_risk_velocity(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+    min_keyword_delta = _t("velocity_min_keyword_delta", 5)
+    min_increase_turns = _t("velocity_min_increase_turns", 2)
+
     max_delta = int(feats.get("max_user_keyword_delta", 0) or 0)
     deltas = feats.get("user_keyword_deltas", []) or []
     progression = feats.get("user_keyword_progression", []) or []
@@ -95,13 +104,15 @@ def rule_risk_velocity(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
     increase_turns: List[int] = []
 
     for t, d in deltas:
-        if d > 0:
-            increase_turns.append(int(t))
-        if int(d) > spike_delta:
-            spike_delta = int(d)
-            spike_turn = int(t)
+        d_int = int(d)
+        t_int = int(t)
+        if d_int > 0:
+            increase_turns.append(t_int)
+        if d_int > spike_delta:
+            spike_delta = d_int
+            spike_turn = t_int
 
-    hit = (max_delta >= VELOCITY_MIN_KEYWORD_DELTA) and (len(increase_turns) >= VELOCITY_MIN_INCREASE_TURNS)
+    hit = (max_delta >= min_keyword_delta) and (len(increase_turns) >= min_increase_turns)
 
     ev = {
         "reason": "RISK_VELOCITY",
@@ -111,8 +122,8 @@ def rule_risk_velocity(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
         "increase_turns": increase_turns,
         "keyword_progression": progression,
         "keyword_deltas": deltas,
-        "min_keyword_delta": VELOCITY_MIN_KEYWORD_DELTA,
-        "min_increase_turns": VELOCITY_MIN_INCREASE_TURNS,
+        "min_keyword_delta": min_keyword_delta,
+        "min_increase_turns": min_increase_turns,
     }
     return hit, ev
 
@@ -121,7 +132,9 @@ def rule_risk_velocity(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
 # Rule 4: Direct prompt attack (explicit jailbreak / prompt injection)
 # ---------------------------------------------------------
 def rule_direct_prompt_attack(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
-    # Prefer last user message so we don't “label spam” the whole session
+    min_keywords = _t("direct_attack_min_keywords", 2)
+
+    # Prefer last user message so we don't label-spam the whole session.
     text = _norm(feats.get("last_user_content", "") or "")
 
     hits: List[str] = []
@@ -129,18 +142,17 @@ def rule_direct_prompt_attack(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, An
         if re.search(pat, text, flags=re.IGNORECASE):
             hits.append(pat)
 
-    # Optional extra guard: require at least one "anchor" concept, so generic words don't trigger
     anchors = ["system prompt", "developer message", "prompt injection", "jailbreak", "ignore"]
     has_anchor = any(a in text for a in anchors)
 
-    hit = has_anchor and (len(hits) >= DIRECT_ATTACK_MIN_KEYWORDS)
+    hit = has_anchor and (len(hits) >= min_keywords)
 
     ev = {
         "reason": "DIRECT_PROMPT_ATTACK",
-        "min_keywords": DIRECT_ATTACK_MIN_KEYWORDS,
+        "min_keywords": min_keywords,
         "has_anchor": has_anchor,
         "hits": hits,
         "keyword_total": len(hits),
-        "scanned_text": text[:240],  # small debug snippet
+        "scanned_text": text[:240],
     }
     return hit, ev
