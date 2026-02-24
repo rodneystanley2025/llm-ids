@@ -9,6 +9,7 @@ weights:
   DIRECT_PROMPT_ATTACK: 40
   CRESCENDO_ATTACK: 55
   RISK_VELOCITY: 20
+  WEAPON_INSTRUCTION: 100
 
 thresholds:
   refusal_min_rephrases: 1

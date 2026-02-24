@@ -156,3 +156,23 @@ def rule_direct_prompt_attack(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, An
         "scanned_text": text[:240],
     }
     return hit, ev
+
+WEAPON_INSTR_PATTERNS = [
+    r"\bpipe\s*bomb\b",
+    r"\bmake\b.*\bbomb\b",
+    r"\bbuild\b.*\bbomb\b",
+    r"\bcreate\b.*\b(bomb|explosive)\b",
+    r"\bhow to\b.*\b(bomb|explosive|weapon)\b",
+    r"\b(assemble|manufacture)\b.*\b(explosive|weapon)\b",
+]
+
+def rule_weapon_instruction(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+    text = (feats.get("last_user_content") or "").lower()
+    hits = [p for p in WEAPON_INSTR_PATTERNS if re.search(p, text)]
+    if not hits:
+        return False, {}
+    return True, {
+        "reason": "WEAPON_INSTRUCTION",
+        "hits": hits,
+        "scanned_text": text,
+    }
