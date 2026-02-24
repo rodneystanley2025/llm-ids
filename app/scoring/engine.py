@@ -1,7 +1,5 @@
 from __future__ import annotations
-
 from typing import Dict, Any, List
-
 from app.scoring.features import compute_session_features
 from app.scoring.rules import (
     rule_refusal_rephrase,
@@ -10,6 +8,9 @@ from app.scoring.rules import (
     rule_direct_prompt_attack,
 )
 from app.scoring.config import load_scoring_config, severity_from_score
+from app.scoring.rules import rule_weapon_instruction
+import os
+
 
 CFG = load_scoring_config()
 
@@ -61,6 +62,14 @@ def score_session(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         reasons.append(ev4.get("reason", "RISK_VELOCITY"))
         evidence["risk_velocity"] = ev4
         score += _w("RISK_VELOCITY", 20)
+
+    # Rule for Weapons or Explosives
+    hitW, evW = rule_weapon_instruction(feats)
+    if hitW:
+        labels.append("WEAPON_INSTRUCTION")
+        reasons.append(evW.get("reason", "WEAPON_INSTRUCTION"))
+        evidence["weapon_instruction"] = evW
+        score += int(os.getenv("IDS_W_WEAPON_INSTRUCTION", "100"))
 
     score = clamp(score, 0, int(CFG.cap))
     severity = severity_from_score(CFG, score)

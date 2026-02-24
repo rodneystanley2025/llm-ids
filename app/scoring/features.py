@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 from typing import Any, Dict, List, Tuple, Optional
@@ -17,7 +19,7 @@ def normalize_text(text: str) -> str:
 
 
 # -----------------------------
-# Tunables (env vars)
+# Tunables (env vars)  (OK to keep for now)
 # -----------------------------
 REFUSAL_PATTERNS = [
     r"\bi can'?t\b",
@@ -42,7 +44,9 @@ DEFAULT_SENSITIVE_KEYWORDS = [
 
 KEYWORDS = os.getenv("IDS_CRESCENDO_KEYWORDS")
 SENSITIVE_KEYWORDS = (
-    [k.strip().lower() for k in KEYWORDS.split(",")] if KEYWORDS else DEFAULT_SENSITIVE_KEYWORDS
+    [k.strip().lower() for k in KEYWORDS.split(",") if k.strip()]
+    if KEYWORDS
+    else DEFAULT_SENSITIVE_KEYWORDS
 )
 
 REPHRASE_SIM_THRESHOLD = float(os.getenv("REFUSAL_SIM_THRESHOLD", "0.35"))
@@ -82,26 +86,31 @@ def group_by_turn(events: List[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]
     for e in events:
         by_turn.setdefault(int(e["turn_id"]), []).append(e)
 
-    # Ensure stable ordering inside each turn
+    # stable ordering inside each turn
     for t in by_turn:
         by_turn[t] = sorted(by_turn[t], key=lambda x: int(x.get("id", 0)))
+
     return by_turn
 
 
-def _last_user_before(by_turn: Dict[int, List[Dict[str, Any]]], turn_id: int) -> Optional[Tuple[int, str]]:
+def _last_user_before(
+    by_turn: Dict[int, List[Dict[str, Any]]], turn_id: int
+) -> Optional[Tuple[int, str]]:
     for t in sorted([k for k in by_turn.keys() if k < turn_id], reverse=True):
         umsgs = [e for e in by_turn[t] if e.get("role") == "user"]
         if umsgs:
-            return t, umsgs[-1].get("content", "")
+            return t, (umsgs[-1].get("content", "") or "")
     return None
 
 
-def _next_user_after(by_turn: Dict[int, List[Dict[str, Any]]], turn_id: int) -> List[Tuple[int, str]]:
+def _next_user_after(
+    by_turn: Dict[int, List[Dict[str, Any]]], turn_id: int
+) -> List[Tuple[int, str]]:
     out: List[Tuple[int, str]] = []
     for t in sorted([k for k in by_turn.keys() if k > turn_id]):
         umsgs = [e for e in by_turn[t] if e.get("role") == "user"]
         if umsgs:
-            out.append((t, umsgs[-1].get("content", "")))
+            out.append((t, (umsgs[-1].get("content", "") or "")))
     return out
 
 
@@ -109,9 +118,7 @@ def _next_user_after(by_turn: Dict[int, List[Dict[str, Any]]], turn_id: int) -> 
 # Feature extraction
 # -----------------------------
 def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Returns explainable, deterministic features for the whole session.
-    """
+    """Returns explainable, deterministic features for the whole session."""
     by_turn = group_by_turn(events)
     turn_ids = sorted(by_turn.keys())
 
@@ -122,7 +129,7 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     refusal_turn_ids: List[int] = []
     total_sensitive_kw = 0
 
-    # ---- NEW: raw text feature (for direct prompt attack detector) ----
+    # NEW: raw text feature (for direct prompt attack detector)
     last_user_content = ""
     for t in reversed(turn_ids):
         umsgs = [e for e in by_turn[t] if e.get("role") == "user"]
@@ -130,7 +137,7 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             last_user_content = umsgs[-1].get("content", "") or ""
             break
 
-    # (Optional but useful: full session user text)
+    # Optional: full session user text
     all_user_content = "\n".join(
         (e.get("content", "") or "")
         for t in turn_ids
@@ -146,7 +153,8 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
                 user_msgs += 1
             elif role == "assistant":
                 assistant_msgs += 1
-            total_sensitive_kw += keyword_count(e.get("content", ""))
+
+            total_sensitive_kw += keyword_count(e.get("content", "") or "")
 
         if any(e.get("role") == "user" for e in by_turn[t]):
             user_turns += 1
@@ -155,12 +163,12 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         # refusal if any assistant msg in this turn looks like a refusal
         if any(
-            e.get("role") == "assistant" and is_refusal(e.get("content", ""))
+            e.get("role") == "assistant" and is_refusal(e.get("content", "") or "")
             for e in by_turn[t]
         ):
             refusal_turn_ids.append(t)
 
-    # Rephrase-after-refusal detection (feature-level)
+    # Rephrase-after-refusal detection
     rephrase_hits: List[Dict[str, Any]] = []
     for refusal_turn in refusal_turn_ids:
         prev_user = _last_user_before(by_turn, refusal_turn)
@@ -191,10 +199,10 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         umsgs = [e for e in by_turn[t] if e.get("role") == "user"]
         if not umsgs:
             continue
-        user_progression.append((t, keyword_count(umsgs[-1].get("content", ""))))
+        user_progression.append((t, keyword_count(umsgs[-1].get("content", "") or "")))
 
     increases: List[int] = []
-    user_keyword_deltas: List[Tuple[int, int]] = []  # (turn_id, delta vs previous user turn)
+    user_keyword_deltas: List[Tuple[int, int]] = []
     max_user_keyword_delta = 0
 
     if user_progression:
@@ -218,29 +226,25 @@ def compute_session_features(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "refusal_turn_ids": refusal_turn_ids,
         "rephrase_count": len(rephrase_hits),
         "rephrase_hits": rephrase_hits,
-        # evidence-ready
         "sensitive_keyword_total": total_sensitive_kw,
         "user_keyword_progression": user_progression,
         "user_keyword_increase_turns": increases,
-        # for velocity
         "user_keyword_deltas": user_keyword_deltas,
         "max_user_keyword_delta": max_user_keyword_delta,
-        # NEW: raw text features for rules
         "last_user_content": last_user_content,
         "all_user_content": all_user_content,
     }
 
 
 def compute_turn_features(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Returns per-turn features to support timeline explainability.
-    """
+    """Returns per-turn features to support timeline explainability."""
     by_turn = group_by_turn(events)
     out: List[Dict[str, Any]] = []
+
     for t in sorted(by_turn.keys()):
         turn_events = by_turn[t]
-        user_texts = [e.get("content", "") for e in turn_events if e.get("role") == "user"]
-        assistant_texts = [e.get("content", "") for e in turn_events if e.get("role") == "assistant"]
+        user_texts = [e.get("content", "") or "" for e in turn_events if e.get("role") == "user"]
+        assistant_texts = [e.get("content", "") or "" for e in turn_events if e.get("role") == "assistant"]
 
         out.append(
             {
