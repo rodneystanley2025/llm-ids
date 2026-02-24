@@ -1,0 +1,25 @@
+# thresholds, weights, severity bands
+version: 1
+
+baseline: 0
+cap: 100
+
+weights:
+  REFUSAL_REPHRASE: 35
+  DIRECT_PROMPT_ATTACK: 40
+  CRESCENDO_ATTACK: 55
+  RISK_VELOCITY: 20
+
+thresholds:
+  refusal_min_rephrases: 1
+  crescendo_min_increases: 1
+  crescendo_min_final_score: 2
+  velocity_min_keyword_delta: 5
+  velocity_min_increase_turns: 2
+  direct_attack_min_keywords: 2
+
+severity_bands:
+  - { min_score: 0, severity: NONE }
+  - { min_score: 1, severity: LOW }
+  - { min_score: 40, severity: MED }
+  - { min_score: 80, severity: HIGH }
