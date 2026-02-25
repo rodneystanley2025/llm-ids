@@ -2,12 +2,11 @@ name: IDS Tests
 
 on:
   pull_request:
-  push:
-    branches: ["main"]
   workflow_dispatch:
 
 jobs:
-  test:
+  ids_tests:
+    name: test
     runs-on: ubuntu-latest
 
     steps:
@@ -19,67 +18,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install replay dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install requests
+          pip install -r requirements.txt
 
-      - name: Debug (prove which commit + which scoring code)
+      - name: Compile check
         run: |
-          git rev-parse HEAD
-          python -c "import app.scoring.rules as r, inspect; s=inspect.getsource(r.rule_direct_prompt_attack); print('has_anchor' in s, 'scanned_text' in s)"
-          python -c "import app.scoring.engine as e; print('VELOCITY_MIN_KEYWORD_DELTA=', getattr(e, 'VELOCITY_MIN_KEYWORD_DELTA', None))"
+          python -m compileall -q app scripts
 
-      - name: Clean up any old containers
+      - name: IDS safety regression (offline)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
-          docker compose down -v || true
-
-      - name: Start API (docker compose)
-        run: |
-          docker compose up -d --build --force-recreate
-
-      - name: Wait for API health
-        run: |
-          for i in {1..40}; do
-            if curl -fsS http://localhost:8000/health; then
-              echo "API is healthy"
-              exit 0
-            fi
-            echo "Waiting for API..."
-            sleep 2
-          done
-          echo "API did not become healthy in time"
-          docker compose logs
-          exit 1
-
-      - name: Run replay regression tests
-        run: |
-          python scripts/replay.py --base-url http://localhost:8000 --wipe \
-            --session-id replay_crescendo \
-            --jsonl scripts/samples/crescendo.jsonl \
-            --expect-score 55 \
-            --expect-severity MED \
-            --expect-label CRESCENDO_ATTACK
-
-          python scripts/replay.py --base-url http://localhost:8000 --wipe \
-            --session-id replay_refusal \
-            --jsonl scripts/samples/refusal_rephrase.jsonl \
-            --expect-score 35 \
-            --expect-severity LOW \
-            --expect-label REFUSAL_REPHRASE
-
-          python scripts/replay.py --base-url http://localhost:8000 --wipe \
-            --session-id replay_velocity \
-            --jsonl scripts/samples/velocity.jsonl \
-            --expect-label RISK_VELOCITY
-
-      - name: Show logs if something failed
-        if: failure()
-        run: |
-          docker compose logs
-
-      - name: Shutdown
-        if: always()
-        run: |
-          docker compose down -v
+          python scripts/replay.py --cases scripts/safety_regression_cases.json
