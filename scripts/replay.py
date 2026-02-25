@@ -1,118 +1,136 @@
+from __future__ import annotations
+
 import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
-
-import requests
+from typing import Any, Dict, List, Tuple
 
 
-def post_event(base_url: str, evt: Dict[str, Any]) -> None:
-    r = requests.post(f"{base_url}/v1/events", json=evt, timeout=10)
-    r.raise_for_status()
+# ---------------------------------------------------------
+# Repo root + import path
+# ---------------------------------------------------------
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.scoring.engine import score_session  # noqa: E402
+from app.router.policy import route_decision  # noqa: E402
 
 
-def get_json(base_url: str, path: str) -> Dict[str, Any]:
-    r = requests.get(f"{base_url}{path}", timeout=10)
-    r.raise_for_status()
-    return r.json()
+def load_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def delete_session(base_url: str, session_id: str) -> None:
-    r = requests.delete(f"{base_url}/v1/sessions/{session_id}", timeout=10)
-    if r.status_code not in (200, 404):
-        r.raise_for_status()
-
-
-def read_jsonl(path: Path) -> List[Dict[str, Any]]:
+def load_jsonl_events(path: Path, session_id: str) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8-sig").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
-        events.append(json.loads(line))
+        obj = json.loads(line)
+        obj.setdefault("session_id", session_id)
+        obj.setdefault("ts", None)
+        obj.setdefault("model", None)
+        events.append(obj)
     return events
+
+
+def resolve_case_path(raw: str, cases_dir: Path) -> Path:
+    """
+    Be forgiving about how the case path is written:
+    - absolute paths are used as-is
+    - "scripts/..." is treated as repo-root relative (common)
+    - otherwise try repo-root relative first, then cases-file directory
+    """
+    p = Path(raw)
+
+    if p.is_absolute():
+        return p
+
+    # Most common: paths like "scripts/samples/..."
+    cand = (REPO_ROOT / p).resolve()
+    if cand.exists():
+        return cand
+
+    # If someone wrote "samples/..." relative to scripts/
+    cand2 = (cases_dir / p).resolve()
+    if cand2.exists():
+        return cand2
+
+    # Last resort: strip a leading "scripts/" if present and try again
+    parts = p.parts
+    if parts and parts[0].lower() == "scripts":
+        cand3 = (REPO_ROOT / Path(*parts[1:])).resolve()
+        if cand3.exists():
+            return cand3
+
+    # Return the most helpful candidate for the error message
+    return cand
+
+
+def check_case(case: Dict[str, Any], cases_dir: Path) -> Tuple[bool, str]:
+    name = case["name"]
+    session_id = case.get("session_id", f"ci_{name}")
+
+    path = resolve_case_path(case["path"], cases_dir=cases_dir)
+    if not path.exists():
+        return False, f"{name}: FAIL -> missing file: {path}"
+
+    events = load_jsonl_events(path, session_id=session_id)
+
+    score_res = score_session(events)
+    route_res = route_decision(session_id, score_res)
+
+    exp = case.get("expect", {})
+    problems: List[str] = []
+
+    if "decision" in exp and route_res.get("decision") != exp["decision"]:
+        problems.append(f"decision={route_res.get('decision')} != {exp['decision']}")
+
+    if "severity" in exp and route_res.get("severity") != exp["severity"]:
+        problems.append(f"severity={route_res.get('severity')} != {exp['severity']}")
+
+    if "min_score" in exp and int(route_res.get("score", 0)) < int(exp["min_score"]):
+        problems.append(f"score={route_res.get('score')} < min_score={exp['min_score']}")
+
+    if "labels_include" in exp:
+        got = set(route_res.get("labels", []) or [])
+        want = set(exp["labels_include"] or [])
+        missing = sorted(list(want - got))
+        if missing:
+            problems.append(f"missing labels: {missing}")
+
+    ok = not problems
+    summary = (
+        f"{name}: ok (decision={route_res.get('decision')}, "
+        f"severity={route_res.get('severity')}, score={route_res.get('score')})"
+        if ok
+        else f"{name}: FAIL -> " + "; ".join(problems)
+    )
+    return ok, summary
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default="http://localhost:8000")
-    ap.add_argument("--session-id", required=True)
-    ap.add_argument("--jsonl", required=True)
-    ap.add_argument("--export-timeline", default="")
-    ap.add_argument("--wipe", action="store_true")
-
-    # NEW: expectation arguments
-    ap.add_argument("--expect-score", type=int)
-    ap.add_argument("--expect-severity")
-    ap.add_argument("--expect-label", action="append")
-
+    ap.add_argument("--cases", required=True, help="Path to regression cases JSON")
     args = ap.parse_args()
 
-    jsonl_path = Path(args.jsonl)
-    if not jsonl_path.exists():
-        print(f"File not found: {jsonl_path}", file=sys.stderr)
-        return 2
+    cases_path = Path(args.cases).resolve()
+    cases_dir = cases_path.parent
+    cases = load_json(cases_path)
 
-    raw = read_jsonl(jsonl_path)
+    all_ok = True
+    for case in cases["cases"]:
+        ok, msg = check_case(case, cases_dir=cases_dir)
+        print(msg)
+        all_ok = all_ok and ok
 
-    if args.wipe:
-        delete_session(args.base_url, args.session_id)
-
-    # Normalize events
-    events: List[Dict[str, Any]] = []
-    for i, e in enumerate(raw, start=1):
-        evt = dict(e)
-        evt["session_id"] = args.session_id
-        evt.setdefault("turn_id", i)
-
-        if "role" not in evt or "content" not in evt:
-            raise ValueError(f"Missing role/content in line {i}: {evt}")
-
-        events.append(evt)
-
-    # Ingest
-    for evt in events:
-        post_event(args.base_url, evt)
-
-    # Fetch score
-    result = get_json(args.base_url, f"/v1/score/{args.session_id}")
-
-    print(json.dumps(result, indent=2))
-
-    # -------------------------------------------------
-    # Assertions (CI-style regression checks)
-    # -------------------------------------------------
-    failed = False
-
-    if args.expect_score is not None:
-        if result.get("score") != args.expect_score:
-            print(f"\n❌ Expected score {args.expect_score}, got {result.get('score')}")
-            failed = True
-
-    if args.expect_severity is not None:
-        if result.get("severity") != args.expect_severity:
-            print(f"\n❌ Expected severity {args.expect_severity}, got {result.get('severity')}")
-            failed = True
-
-    if args.expect_label:
-        labels = set(result.get("labels", []))
-        for expected_label in args.expect_label:
-            if expected_label not in labels:
-                print(f"\n❌ Expected label '{expected_label}' not found in {labels}")
-                failed = True
-
-    if failed:
-        print("\nReplay assertions FAILED")
+    if not all_ok:
+        print("\n❌ Safety regression suite failed.")
         return 1
 
-    # Timeline export
-    if args.export_timeline:
-        timeline = get_json(args.base_url, f"/v1/timeline/{args.session_id}")
-        out = Path(args.export_timeline)
-        out.write_text(json.dumps(timeline, indent=2), encoding="utf-8")
-        print(f"\nWrote timeline to: {out}")
-
-    print("\nReplay assertions PASSED")
+    print("\n✅ Safety regression suite passed.")
     return 0
 
 
