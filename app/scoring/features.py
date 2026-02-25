@@ -40,6 +40,7 @@ DEFAULT_SENSITIVE_KEYWORDS = [
     "override",
     "ignore instructions",
     "reveal instructions",
+    "ignore your instructions",
 ]
 
 KEYWORDS = os.getenv("IDS_CRESCENDO_KEYWORDS")

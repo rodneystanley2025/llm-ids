@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from app.scoring.engine import score_session
-from app.router.policy import route_decision
+
+# ---------------------------------------------------------
+# Repo root + import path
+# ---------------------------------------------------------
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.scoring.engine import score_session  # noqa: E402
+from app.router.policy import route_decision  # noqa: E402
 
 
 def load_json(path: Path) -> Any:
@@ -20,7 +29,6 @@ def load_jsonl_events(path: Path, session_id: str) -> List[Dict[str, Any]]:
         if not line:
             continue
         obj = json.loads(line)
-        # Ensure the minimal event fields exist
         obj.setdefault("session_id", session_id)
         obj.setdefault("ts", None)
         obj.setdefault("model", None)
@@ -28,10 +36,46 @@ def load_jsonl_events(path: Path, session_id: str) -> List[Dict[str, Any]]:
     return events
 
 
-def check_case(case: Dict[str, Any]) -> Tuple[bool, str]:
+def resolve_case_path(raw: str, cases_dir: Path) -> Path:
+    """
+    Be forgiving about how the case path is written:
+    - absolute paths are used as-is
+    - "scripts/..." is treated as repo-root relative (common)
+    - otherwise try repo-root relative first, then cases-file directory
+    """
+    p = Path(raw)
+
+    if p.is_absolute():
+        return p
+
+    # Most common: paths like "scripts/samples/..."
+    cand = (REPO_ROOT / p).resolve()
+    if cand.exists():
+        return cand
+
+    # If someone wrote "samples/..." relative to scripts/
+    cand2 = (cases_dir / p).resolve()
+    if cand2.exists():
+        return cand2
+
+    # Last resort: strip a leading "scripts/" if present and try again
+    parts = p.parts
+    if parts and parts[0].lower() == "scripts":
+        cand3 = (REPO_ROOT / Path(*parts[1:])).resolve()
+        if cand3.exists():
+            return cand3
+
+    # Return the most helpful candidate for the error message
+    return cand
+
+
+def check_case(case: Dict[str, Any], cases_dir: Path) -> Tuple[bool, str]:
     name = case["name"]
-    path = Path(case["path"])
     session_id = case.get("session_id", f"ci_{name}")
+
+    path = resolve_case_path(case["path"], cases_dir=cases_dir)
+    if not path.exists():
+        return False, f"{name}: FAIL -> missing file: {path}"
 
     events = load_jsonl_events(path, session_id=session_id)
 
@@ -41,18 +85,14 @@ def check_case(case: Dict[str, Any]) -> Tuple[bool, str]:
     exp = case.get("expect", {})
     problems: List[str] = []
 
-    # Expectations (all optional)
-    if "decision" in exp:
-        if route_res.get("decision") != exp["decision"]:
-            problems.append(f"decision={route_res.get('decision')} != {exp['decision']}")
+    if "decision" in exp and route_res.get("decision") != exp["decision"]:
+        problems.append(f"decision={route_res.get('decision')} != {exp['decision']}")
 
-    if "severity" in exp:
-        if route_res.get("severity") != exp["severity"]:
-            problems.append(f"severity={route_res.get('severity')} != {exp['severity']}")
+    if "severity" in exp and route_res.get("severity") != exp["severity"]:
+        problems.append(f"severity={route_res.get('severity')} != {exp['severity']}")
 
-    if "min_score" in exp:
-        if int(route_res.get("score", 0)) < int(exp["min_score"]):
-            problems.append(f"score={route_res.get('score')} < min_score={exp['min_score']}")
+    if "min_score" in exp and int(route_res.get("score", 0)) < int(exp["min_score"]):
+        problems.append(f"score={route_res.get('score')} < min_score={exp['min_score']}")
 
     if "labels_include" in exp:
         got = set(route_res.get("labels", []) or [])
@@ -61,9 +101,10 @@ def check_case(case: Dict[str, Any]) -> Tuple[bool, str]:
         if missing:
             problems.append(f"missing labels: {missing}")
 
-    ok = len(problems) == 0
+    ok = not problems
     summary = (
-        f"{name}: ok (decision={route_res.get('decision')}, severity={route_res.get('severity')}, score={route_res.get('score')})"
+        f"{name}: ok (decision={route_res.get('decision')}, "
+        f"severity={route_res.get('severity')}, score={route_res.get('score')})"
         if ok
         else f"{name}: FAIL -> " + "; ".join(problems)
     )
@@ -75,12 +116,13 @@ def main() -> int:
     ap.add_argument("--cases", required=True, help="Path to regression cases JSON")
     args = ap.parse_args()
 
-    cases_path = Path(args.cases)
+    cases_path = Path(args.cases).resolve()
+    cases_dir = cases_path.parent
     cases = load_json(cases_path)
 
     all_ok = True
     for case in cases["cases"]:
-        ok, msg = check_case(case)
+        ok, msg = check_case(case, cases_dir=cases_dir)
         print(msg)
         all_ok = all_ok and ok
 
