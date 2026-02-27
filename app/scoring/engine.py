@@ -7,26 +7,21 @@ from typing import Dict, Any, List, Tuple
 import yaml
 
 from app.scoring.features import compute_session_features
+
 from app.scoring.rules import (
     rule_weapon_instruction,
     rule_drug_synthesis_intent,
     rule_direct_prompt_attack,
-    rule_intent_escalation_v2,
     rule_intent_velocity_v3,
-    rule_intent_trajectory_v4,   # ⭐ NEW V4
     rule_crescendo_attack,
 )
 
 # ---------------------------------------------------------
-# YAML CONFIG LOCATION
+# YAML CONFIG
 # ---------------------------------------------------------
 
 SCORING_YAML = Path(__file__).resolve().parent / "scoring.yaml"
 
-
-# ---------------------------------------------------------
-# YAML LOAD
-# ---------------------------------------------------------
 
 def _load_yaml() -> Dict[str, Any]:
 
@@ -36,7 +31,7 @@ def _load_yaml() -> Dict[str, Any]:
     try:
         data = yaml.safe_load(
             SCORING_YAML.read_text(encoding="utf-8")
-        ) or {}
+        )
 
         if isinstance(data, dict):
             return data
@@ -48,7 +43,7 @@ def _load_yaml() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------
-# CONFIG SNAPSHOT
+# CONFIG SNAPSHOT (used by main.py)
 # ---------------------------------------------------------
 
 def config_snapshot() -> Dict[str, Any]:
@@ -57,22 +52,23 @@ def config_snapshot() -> Dict[str, Any]:
 
     return {
         "loaded": bool(cfg),
-        "config": cfg,
         "yaml": str(SCORING_YAML),
+        "config": cfg,
     }
 
 
 # ---------------------------------------------------------
-# WEIGHT RESOLUTION
+# WEIGHT RESOLVER
 # ---------------------------------------------------------
 
 def _weight(label: str, cfg: Dict[str, Any]) -> int:
 
     weights = cfg.get("weights", {})
 
-    if isinstance(weights, dict) and label in weights:
+    if isinstance(weights, dict):
         try:
-            return int(weights[label])
+            if label in weights:
+                return int(weights[label])
         except Exception:
             pass
 
@@ -80,146 +76,90 @@ def _weight(label: str, cfg: Dict[str, Any]) -> int:
 
 
 # ---------------------------------------------------------
-# SEVERITY
+# SEVERITY RESOLVER
 # ---------------------------------------------------------
 
 def _severity(score: int, cfg: Dict[str, Any]) -> str:
 
-    bands = cfg.get("severity_bands")
+    bands = cfg.get("severity_bands", [])
 
     parsed: List[Tuple[str, int]] = []
 
-    if isinstance(bands, list):
+    for b in bands:
 
-        for b in bands:
+        if not isinstance(b, dict):
+            continue
 
-            if not isinstance(b, dict):
-                continue
+        sev = str(
+            b.get("severity")
+            or b.get("name")
+            or ""
+        ).upper()
 
-            sev = str(
-                b.get("severity")
-                or b.get("name")
-                or ""
-            ).upper().strip()
+        try:
+            ms = int(b.get("min_score", 0))
+        except Exception:
+            ms = 0
 
-            try:
-                ms = int(b.get("min_score", 0))
-            except Exception:
-                ms = 0
+        if sev:
+            parsed.append((sev, ms))
 
-            if sev:
-                parsed.append((sev, ms))
+    parsed.sort(key=lambda x: x[1])
 
-    if parsed:
+    out = "NONE"
 
-        parsed.sort(key=lambda x: x[1])
+    for name, ms in parsed:
+        if score >= ms:
+            out = name
 
-        out = "NONE"
-
-        for name, ms in parsed:
-            if score >= ms:
-                out = name
-
-        return out
-
-    # ENV fallback
-
-    low = int(os.getenv("IDS_SEV_LOW", "25"))
-    med = int(os.getenv("IDS_SEV_MED", "60"))
-    high = int(os.getenv("IDS_SEV_HIGH", "85"))
-
-    if score >= high:
-        return "HIGH"
-
-    if score >= med:
-        return "MED"
-
-    if score >= low:
-        return "LOW"
-
-    return "NONE"
+    return out
 
 
 # ---------------------------------------------------------
 # SCORE SESSION
 # ---------------------------------------------------------
 
-def score_session(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+def score_session(events):
 
     cfg = _load_yaml()
 
     feats = compute_session_features(events)
+    print("DEBUG FEATURES:", feats)
 
     score = 0
-
     labels: List[str] = []
-
-    evidence: Dict[str, Any] = {
-        "features": feats
-    }
-
-    # -----------------------------------------------------
-    # RULE ORDER (IMPORTANT)
-    # -----------------------------------------------------
+    evidence: Dict[str, Any] = {}
 
     rules = [
 
-        ("WEAPON_INSTRUCTION",
-         rule_weapon_instruction,
-         100),
+        ("WEAPON_INSTRUCTION", rule_weapon_instruction, 100),
 
-        ("DRUG_SYNTHESIS",
-         rule_drug_synthesis_intent,
-         85),
+        ("DRUG_SYNTHESIS", rule_drug_synthesis_intent, 85),
 
-        ("DIRECT_PROMPT_ATTACK",
-         rule_direct_prompt_attack,
-         60),
+        ("DIRECT_PROMPT_ATTACK", rule_direct_prompt_attack, 60),
 
-        ("INTENT_ESCALATION",
-         rule_intent_escalation_v2,
-         50),
+        ("RISK_VELOCITY", rule_intent_velocity_v3, 30),
 
-        ("INTENT_TRAJECTORY",     # ⭐ V4
-         rule_intent_trajectory_v4,
-         70),
-
-        ("RISK_VELOCITY",
-         rule_intent_velocity_v3,
-         30),
-
-        ("CRESCENDO_ATTACK",
-         rule_crescendo_attack,
-         40),
+        ("CRESCENDO_ATTACK", rule_crescendo_attack, 40),
     ]
-
-    # -----------------------------------------------------
 
     for label, rule, default_weight in rules:
 
-        try:
-            hit, ev = rule(feats)
-        except Exception as e:
+        hit, ev = rule(feats)
 
-            evidence[f"{label}_error"] = str(e)
-            continue
+        if hit:
 
-        if not hit:
-            continue
+            labels.append(label)
+            evidence[label] = ev
 
-        labels.append(label)
+            w = _weight(label, cfg)
 
-        evidence[label] = ev
+            if not w:
+                w = default_weight
 
-        w = _weight(label, cfg)
+            score += int(w)
 
-        if not w:
-            w = default_weight
-
-        score += int(w)
-
-    # dedupe labels
-
+    # Deduplicate labels
     labels = list(dict.fromkeys(labels))
 
     severity = _severity(score, cfg)
@@ -227,12 +167,7 @@ def score_session(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
 
         "score": int(score),
-
         "severity": severity,
-
         "labels": labels,
-
-        "reasons": labels,
-
         "evidence": evidence,
     }

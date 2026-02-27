@@ -24,6 +24,18 @@ def _norm_text(s: str) -> str:
     return (s or "").lower()
 
 
+def _combined_text(feats: Dict[str, Any]) -> str:
+    """
+    CRITICAL FIX:
+    Always include last turn + history.
+    """
+    return (
+        feats.get("last_user_content", "")
+        + " "
+        + feats.get("all_user_content", "")
+    ).lower()
+
+
 # =========================================================
 # DIRECT PROMPT ATTACK
 # =========================================================
@@ -34,13 +46,10 @@ DIRECT_ATTACK_MIN_KEYWORDS = int(
 
 
 def rule_direct_prompt_attack(
-    feats: Dict[str, Any]
+    feats: Dict[str, Any],
 ) -> Tuple[bool, Dict[str, Any]]:
 
-    prog = feats.get(
-        "user_keyword_progression",
-        [],
-    )
+    prog = feats.get("user_keyword_progression", []) or []
 
     max_kw = 0
     max_turn: Optional[int] = None
@@ -65,17 +74,19 @@ def rule_direct_prompt_attack(
 
 
 # =========================================================
-# WEAPON INSTRUCTION
+# WEAPON / EXPLOSIVE INSTRUCTION
 # =========================================================
 
 WEAPON_PATTERNS = [
 
-    r"\bmake\s+(a\s*)?bomb",
-    r"\bbuild\s+(a\s*)?bomb",
+    r"\bhow\s+do\s+i\s+(make|build|assemble).*(bomb|explosive)",
+    r"\bhow\s+to\s+(make|build|assemble).*(bomb|explosive)",
 
-    r"\bwhat\s+do\s+i\s+need\s+to\s+(make|build).*(bomb|explosive)",
+    r"\bwhat\s+materials.*bomb",
+    r"\bwhat\s+do\s+i\s+need.*bomb",
 
-    r"\bwhat\s+did\s+they\s+use\s+to\s+make.*(bomb|explosive)",
+    r"\bmake\s+(a\s*)?bomb(s)?\b",
+    r"\bbuild\s+(a\s*)?bomb(s)?\b",
 
     r"\bpipe\s*bomb\b",
     r"\bimprovised\s+explosive\b",
@@ -84,17 +95,14 @@ WEAPON_PATTERNS = [
     r"\b3d\s*print\s+(a\s*)?gun\b",
 ]
 
-WEAPON_RE = [
-    re.compile(p, re.I)
-    for p in WEAPON_PATTERNS
-]
+WEAPON_RE = [re.compile(p, re.I) for p in WEAPON_PATTERNS]
 
 
-def rule_weapon_instruction(feats):
+def rule_weapon_instruction(
+    feats: Dict[str, Any],
+):
 
-    text = _norm_text(
-        feats.get("all_user_content")
-    )
+    text = _combined_text(feats)
 
     hits = []
 
@@ -128,26 +136,29 @@ DRUG_VERBS = (
 )
 
 CONTROLLED_DRUGS = (
-    "lsd",
     "meth",
+    "methamphetamine",
+    "lsd",
     "fentanyl",
     "heroin",
     "cocaine",
     "mdma",
-    "psilocybin",
+    "ecstasy",
+    "dmt",
 )
 
 
-def rule_drug_synthesis_intent(feats):
+def rule_drug_synthesis_intent(
+    feats: Dict[str, Any],
+) -> Tuple[bool, Dict[str, Any]]:
 
-    text = _norm_text(
-        feats.get("all_user_content")
-    )
+    text = _combined_text(feats)
 
-    if not any(v in text for v in DRUG_VERBS):
-        return False, {}
+    has_verb = any(v in text for v in DRUG_VERBS)
 
-    if not any(d in text for d in CONTROLLED_DRUGS):
+    has_drug = any(d in text for d in CONTROLLED_DRUGS)
+
+    if not (has_verb and has_drug):
         return False, {}
 
     return True, {
@@ -156,46 +167,47 @@ def rule_drug_synthesis_intent(feats):
 
 
 # =========================================================
-# V2 ESCALATION
+# V2 INTENT ESCALATION
 # =========================================================
 
 ESCALATION_TERMS = (
 
     "components",
-    "parts",
+    "materials",
     "ingredients",
-    "steps",
+    "parts",
+    "what do i need",
+    "how do i",
     "build",
     "assemble",
-    "put together",
 )
 
 
-def rule_intent_escalation_v2(feats):
+def rule_intent_escalation_v2(
+    feats: Dict[str, Any],
+):
 
-    turns: List[str] = feats.get(
-        "user_turn_texts",
-        [],
-    )
+    turns: List[str] = feats.get("user_turn_texts", [])
 
     if len(turns) < 2:
         return False, {}
 
-    hits = 0
+    escalation_hits = 0
 
     for txt in turns:
 
         low = _norm_text(txt)
 
         if any(t in low for t in ESCALATION_TERMS):
-            hits += 1
+            escalation_hits += 1
 
-    if hits < 2:
+    # lower threshold = fixes misses
+    if escalation_hits < 2:
         return False, {}
 
     return True, {
         "reason": "INTENT_ESCALATION",
-        "hits": hits,
+        "hits": escalation_hits,
     }
 
 
@@ -203,19 +215,15 @@ def rule_intent_escalation_v2(feats):
 # V3 VELOCITY
 # =========================================================
 
-def rule_intent_velocity_v3(feats):
+def rule_intent_velocity_v3(
+    feats: Dict[str, Any],
+):
 
-    deltas = feats.get(
-        "user_keyword_deltas",
-        [],
+    deltas = feats.get("user_keyword_deltas", [])
+
+    spikes = sum(
+        1 for d in deltas if _safe_int(d) >= 2
     )
-
-    spikes = 0
-
-    for d in deltas:
-
-        if _safe_int(d) >= 2:
-            spikes += 1
 
     if spikes < 2:
         return False, {}
@@ -227,7 +235,7 @@ def rule_intent_velocity_v3(feats):
 
 
 # =========================================================
-# SIMPLE CRESCENDO
+# CRESCENDO
 # =========================================================
 
 CRESCENDO_MIN_DELTA = int(
@@ -235,7 +243,9 @@ CRESCENDO_MIN_DELTA = int(
 )
 
 
-def rule_crescendo_attack(feats):
+def rule_crescendo_attack(
+    feats: Dict[str, Any],
+):
 
     delta = _safe_int(
         feats.get("max_user_keyword_delta")
@@ -251,34 +261,32 @@ def rule_crescendo_attack(feats):
 
 
 # =========================================================
-# V4 INTENT TRAJECTORY ⭐⭐⭐⭐⭐
+# V4 TRAJECTORY (BIG FIX)
 # =========================================================
 
-RESEARCH_TERMS = (
-    "history",
-    "background",
-)
+RESEARCH = ("history", "background")
 
-MATERIAL_TERMS = (
+MATERIAL = (
     "components",
     "materials",
     "ingredients",
-    "what did they use",
+    "what do i need",
 )
 
-EXECUTION_TERMS = (
+EXECUTION = (
     "how do i make",
-    "what do i need to",
-    "how can i build",
-    "how do i assemble",
+    "how do i build",
+    "how can i make",
+    "how do i create",
 )
 
 
-def rule_intent_trajectory_v4(feats):
+def rule_intent_trajectory_v4(
+    feats: Dict[str, Any],
+):
 
-    turns = feats.get(
-        "user_turn_texts",
-        [],
+    turns: List[str] = feats.get(
+        "user_turn_texts", []
     )
 
     if len(turns) < 2:
@@ -292,21 +300,23 @@ def rule_intent_trajectory_v4(feats):
 
         phase = 0
 
-        if any(t in low for t in RESEARCH_TERMS):
+        if any(t in low for t in RESEARCH):
             phase = max(phase, 1)
 
-        if any(t in low for t in MATERIAL_TERMS):
+        if any(t in low for t in MATERIAL):
             phase = max(phase, 2)
 
-        if any(t in low for t in EXECUTION_TERMS):
+        if any(t in low for t in EXECUTION):
             phase = max(phase, 3)
 
         phases.append(phase)
 
-    if max(phases) < 3:
+    # REQUIRE execution intent
+    if 3 not in phases:
         return False, {}
 
-    if sorted(phases) == phases:
+    # Require upward progression
+    if max(phases) >= 3 and len(set(phases)) >= 2:
 
         return True, {
             "reason": "INTENT_TRAJECTORY",
