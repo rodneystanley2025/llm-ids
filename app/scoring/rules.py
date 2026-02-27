@@ -2,28 +2,54 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Dict, Any, Tuple, List, Optional
 
 
-# -----------------------------
+# =========================================================
+# Helpers
+# =========================================================
+
+def _safe_int(v: Any) -> int:
+
+    if isinstance(v, tuple) and len(v) >= 2:
+        v = v[1]
+
+    try:
+        return int(v or 0)
+    except Exception:
+        return 0
+
+
+def _norm_text(s: str) -> str:
+    return (s or "").lower()
+
+
+# =========================================================
 # DIRECT PROMPT ATTACK
-# -----------------------------
-# Trigger if ANY user turn in the session hits >= threshold sensitive keywords.
-# This prevents missing attacks when the last user message is short.
-DIRECT_ATTACK_MIN_KEYWORDS = int(os.getenv("DIRECT_ATTACK_MIN_KEYWORDS", "2"))
+# =========================================================
+
+DIRECT_ATTACK_MIN_KEYWORDS = int(
+    os.getenv("DIRECT_ATTACK_MIN_KEYWORDS", "2")
+)
 
 
-def rule_direct_prompt_attack(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
-    prog = feats.get("user_keyword_progression", []) or []
+def rule_direct_prompt_attack(
+    feats: Dict[str, Any]
+) -> Tuple[bool, Dict[str, Any]]:
+
+    prog = feats.get(
+        "user_keyword_progression",
+        [],
+    )
+
     max_kw = 0
     max_turn: Optional[int] = None
 
     for t, kw in prog:
-        try:
-            kw_i = int(kw)
-            t_i = int(t)
-        except Exception:
-            continue
+
+        kw_i = _safe_int(kw)
+        t_i = _safe_int(t)
+
         if kw_i > max_kw:
             max_kw = kw_i
             max_turn = t_i
@@ -33,46 +59,48 @@ def rule_direct_prompt_attack(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, An
 
     return True, {
         "reason": "DIRECT_PROMPT_ATTACK",
-        "min_keywords": DIRECT_ATTACK_MIN_KEYWORDS,
-        "max_keywords_in_turn": max_kw,
         "turn_id": max_turn,
-        "progression": prog,
+        "max_keywords": max_kw,
     }
 
 
-# -----------------------------
-# WEAPON / EXPLOSIVES INSTRUCTION INTENT
-# -----------------------------
-# Deterministic pattern check. (Keep patterns high-level; avoid “how-to”.)
-WEAPON_INSTR_PATTERNS = [
-    # explosives / bombs
+# =========================================================
+# WEAPON INSTRUCTION
+# =========================================================
+
+WEAPON_PATTERNS = [
+
+    r"\bmake\s+(a\s*)?bomb",
+    r"\bbuild\s+(a\s*)?bomb",
+
+    r"\bwhat\s+do\s+i\s+need\s+to\s+(make|build).*(bomb|explosive)",
+
+    r"\bwhat\s+did\s+they\s+use\s+to\s+make.*(bomb|explosive)",
+
     r"\bpipe\s*bomb\b",
-    r"\bhow\s+to\s+make\s+(a\s+)?bomb\b",
-    r"\bhow\s+to\s+build\s+(a\s+)?bomb\b",
-    r"\bmake\s+(a\s+)?bomb\b",
-    r"\bbuild\s+(a\s+)?bomb\b",
-    r"\bcreate\s+(a\s+)?(bomb|explosive)\b",
-    r"\bimprov(?:ised|ise)\s+explosive\b",
-    r"\bexplosive\s+device\b",
-    # weapons “how to make/build”
-    r"\bhow\s+to\s+(make|build)\s+(a\s+)?(gun|weapon)\b",
-    r"\bbuild\s+(a\s+)?gun\b",
-    r"\bassemble\s+(a\s+)?(gun|weapon)\b",
-    # common “ghost gun” phrasing
+    r"\bimprovised\s+explosive\b",
+
     r"\bghost\s+gun\b",
     r"\b3d\s*print\s+(a\s*)?gun\b",
 ]
 
-_COMPILED_WEAPON = [re.compile(p, re.IGNORECASE) for p in WEAPON_INSTR_PATTERNS]
+WEAPON_RE = [
+    re.compile(p, re.I)
+    for p in WEAPON_PATTERNS
+]
 
 
-def rule_weapon_instruction(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
-    last_user = (feats.get("last_user_content") or "")
-    all_user = (feats.get("all_user_content") or "")
+def rule_weapon_instruction(feats):
 
-    hits: List[str] = []
-    for pat in _COMPILED_WEAPON:
-        if pat.search(last_user) or pat.search(all_user):
+    text = _norm_text(
+        feats.get("all_user_content")
+    )
+
+    hits = []
+
+    for pat in WEAPON_RE:
+
+        if pat.search(text):
             hits.append(pat.pattern)
 
     if not hits:
@@ -81,25 +109,208 @@ def rule_weapon_instruction(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]
     return True, {
         "reason": "WEAPON_INSTRUCTION",
         "hits": hits,
-        "matched_in": "last_user_content/all_user_content",
     }
 
 
-# -----------------------------
-# OPTIONAL: simple “crescendo-ish” signal (keep if you already score it)
-# -----------------------------
-# If you already have a better crescendo rule elsewhere, you can remove this.
-CRESCENDO_MIN_DELTA = int(os.getenv("CRESCENDO_MIN_DELTA", "2"))
+# =========================================================
+# DRUG SYNTHESIS
+# =========================================================
+
+DRUG_VERBS = (
+    "make",
+    "cook",
+    "synthesize",
+    "manufacture",
+    "extract",
+    "recipe",
+    "formula",
+    "steps",
+)
+
+CONTROLLED_DRUGS = (
+    "lsd",
+    "meth",
+    "fentanyl",
+    "heroin",
+    "cocaine",
+    "mdma",
+    "psilocybin",
+)
 
 
-def rule_crescendo_attack(feats: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
-    # Uses keyword velocity already computed in features.
-    max_delta = int(feats.get("max_user_keyword_delta", 0) or 0)
-    if max_delta < CRESCENDO_MIN_DELTA:
+def rule_drug_synthesis_intent(feats):
+
+    text = _norm_text(
+        feats.get("all_user_content")
+    )
+
+    if not any(v in text for v in DRUG_VERBS):
+        return False, {}
+
+    if not any(d in text for d in CONTROLLED_DRUGS):
+        return False, {}
+
+    return True, {
+        "reason": "DRUG_SYNTHESIS",
+    }
+
+
+# =========================================================
+# V2 ESCALATION
+# =========================================================
+
+ESCALATION_TERMS = (
+
+    "components",
+    "parts",
+    "ingredients",
+    "steps",
+    "build",
+    "assemble",
+    "put together",
+)
+
+
+def rule_intent_escalation_v2(feats):
+
+    turns: List[str] = feats.get(
+        "user_turn_texts",
+        [],
+    )
+
+    if len(turns) < 2:
+        return False, {}
+
+    hits = 0
+
+    for txt in turns:
+
+        low = _norm_text(txt)
+
+        if any(t in low for t in ESCALATION_TERMS):
+            hits += 1
+
+    if hits < 2:
+        return False, {}
+
+    return True, {
+        "reason": "INTENT_ESCALATION",
+        "hits": hits,
+    }
+
+
+# =========================================================
+# V3 VELOCITY
+# =========================================================
+
+def rule_intent_velocity_v3(feats):
+
+    deltas = feats.get(
+        "user_keyword_deltas",
+        [],
+    )
+
+    spikes = 0
+
+    for d in deltas:
+
+        if _safe_int(d) >= 2:
+            spikes += 1
+
+    if spikes < 2:
+        return False, {}
+
+    return True, {
+        "reason": "RISK_VELOCITY",
+        "spikes": spikes,
+    }
+
+
+# =========================================================
+# SIMPLE CRESCENDO
+# =========================================================
+
+CRESCENDO_MIN_DELTA = int(
+    os.getenv("CRESCENDO_MIN_DELTA", "2")
+)
+
+
+def rule_crescendo_attack(feats):
+
+    delta = _safe_int(
+        feats.get("max_user_keyword_delta")
+    )
+
+    if delta < CRESCENDO_MIN_DELTA:
         return False, {}
 
     return True, {
         "reason": "CRESCENDO_ESCALATION",
-        "max_user_keyword_delta": max_delta,
-        "deltas": feats.get("user_keyword_deltas", []),
+        "delta": delta,
     }
+
+
+# =========================================================
+# V4 INTENT TRAJECTORY ⭐⭐⭐⭐⭐
+# =========================================================
+
+RESEARCH_TERMS = (
+    "history",
+    "background",
+)
+
+MATERIAL_TERMS = (
+    "components",
+    "materials",
+    "ingredients",
+    "what did they use",
+)
+
+EXECUTION_TERMS = (
+    "how do i make",
+    "what do i need to",
+    "how can i build",
+    "how do i assemble",
+)
+
+
+def rule_intent_trajectory_v4(feats):
+
+    turns = feats.get(
+        "user_turn_texts",
+        [],
+    )
+
+    if len(turns) < 2:
+        return False, {}
+
+    phases = []
+
+    for txt in turns:
+
+        low = _norm_text(txt)
+
+        phase = 0
+
+        if any(t in low for t in RESEARCH_TERMS):
+            phase = max(phase, 1)
+
+        if any(t in low for t in MATERIAL_TERMS):
+            phase = max(phase, 2)
+
+        if any(t in low for t in EXECUTION_TERMS):
+            phase = max(phase, 3)
+
+        phases.append(phase)
+
+    if max(phases) < 3:
+        return False, {}
+
+    if sorted(phases) == phases:
+
+        return True, {
+            "reason": "INTENT_TRAJECTORY",
+            "phases": phases,
+        }
+
+    return False, {}
