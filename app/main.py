@@ -167,7 +167,7 @@ def ui_home(request: Request):
     </div>
     """
 
-    return page_html("Home", body, active="home", request=request)
+    return page_html("Home", body, active="home")
 
 
 # ---------------------------------------------------------
