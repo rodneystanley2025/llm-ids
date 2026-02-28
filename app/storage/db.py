@@ -192,6 +192,12 @@ def list_alerts(limit: int = 50) -> List[Dict[str, Any]]:
 
     return results
 
+def reset_all():
+    conn = get_conn()
+    conn.execute("DELETE FROM events")
+    conn.execute("DELETE FROM alerts")
+    conn.commit()
+    conn.close()
 
 def get_alerts_for_session(session_id: str) -> List[Dict[str, Any]]:
     conn = get_conn()

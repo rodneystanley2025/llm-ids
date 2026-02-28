@@ -1,183 +1,105 @@
-from __future__ import annotations
-
 from typing import Optional
 
+def page_html(title: str, body: str, active: Optional[str] = None) -> str:
 
-# ---------------------------------------------------------
-# HTML escape helper
-# ---------------------------------------------------------
-def _esc(s: str) -> str:
-    return (
-        (s or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
+    def nav_link(name: str, href: str, key: str):
+        cls = "active" if active == key else ""
+        return f'<a class="{cls}" href="{href}">{name}</a>'
 
-
-# ---------------------------------------------------------
-# Navigation Bar
-# ---------------------------------------------------------
-def nav_html(active: Optional[str] = None) -> str:
-    """
-    active keys:
-
-    home
-    sessions
-    dashboard
-    active
-    alerts
-    """
-
-    active = (active or "").lower().strip()
-
-    def link(href: str, label: str, key: str) -> str:
-        cls = "navlink active" if active == key else "navlink"
-        return f"<a class='{cls}' href='{_esc(href)}'>{_esc(label)}</a>"
-
-    # IMPORTANT:
-    # These MUST point to UI pages — NOT API endpoints.
-    # API endpoints cause the "black JSON screen".
     return f"""
-<div class="nav">
-  {link("/", "Home", "home")}
-  <span class="dot">•</span>
-
-  {link("/ui/sessions", "Sessions", "sessions")}
-  <span class="dot">•</span>
-
-  {link("/ui/dashboard", "Dashboard", "dashboard")}
-  <span class="dot">•</span>
-
-  {link("/ui/active", "Active", "active")}
-  <span class="dot">•</span>
-
-  {link("/ui/alerts", "Alerts", "alerts")}
-</div>
-"""
-
-
-# ---------------------------------------------------------
-# Shared Page Wrapper
-# ---------------------------------------------------------
-def page_html(
-    title: str,
-    body_html: str,
-    *,
-    active: Optional[str] = None,
-    extra_head: str = "",
-    extra_css: str = "",
-) -> str:
-    """
-    Wrap page content with shared layout + navbar.
-
-    Every UI page should call this.
-    """
-
-    return f"""<!doctype html>
+<!DOCTYPE html>
 <html>
 <head>
-
-<meta charset="utf-8" />
-<title>{_esc(title)}</title>
-
+<meta charset="utf-8">
+<title>{title}</title>
 <style>
-
 body {{
-  font-family: system-ui, sans-serif;
-  max-width: 1100px;
-  margin: 24px auto;
-  padding: 0 16px;
+    font-family: Arial, sans-serif;
+    margin: 0;
+    background: #0f172a;
+    color: #e2e8f0;
 }}
 
-a {{
-  color:#2563eb;
-  text-decoration:none;
+nav {{
+    background: #1e293b;
+    padding: 14px;
 }}
 
-code {{
-  background:#f3f4f6;
-  padding:2px 6px;
-  border-radius:8px;
+nav a {{
+    color: #94a3b8;
+    margin-right: 18px;
+    text-decoration: none;
+    font-weight: 600;
 }}
 
-.nav {{
-  margin-bottom:18px;
-}}
-
-.nav .dot {{
-  margin:0 6px;
-  color:#94a3b8;
-}}
-
-.navlink {{
-  padding:5px 10px;
-  border-radius:10px;
-}}
-
-.navlink:hover {{
-  background:#f1f5f9;
-}}
-
-.navlink.active {{
-  background:#0ea5e9;
-  color:white;
+nav a.active {{
+    color: white;
 }}
 
 .card {{
-  border:1px solid #e5e7eb;
-  border-radius:12px;
-  padding:14px;
-  margin:12px 0;
-}}
-
-.muted {{
-  color:#64748b;
-  font-size:12px;
+    background: #1e293b;
+    padding: 16px;
+    margin: 16px;
+    border-radius: 8px;
 }}
 
 table {{
-  width:100%;
-  border-collapse:collapse;
+    width: 100%;
+    border-collapse: collapse;
 }}
 
 th, td {{
-  padding:10px;
-  border-bottom:1px solid #e5e7eb;
-  vertical-align:top;
+    padding: 8px;
+    border-bottom: 1px solid #334155;
 }}
 
 th {{
-  text-align:left;
-  font-size:12px;
-  color:#475569;
-  text-transform:uppercase;
+    text-align: left;
 }}
 
-.links a {{
-  margin-right:10px;
+pre {{
+    background: #0f172a;
+    padding: 8px;
+    border-radius: 6px;
+    overflow-x: auto;
 }}
 
-.session-id {{
-  max-width:320px;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
+button {{
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: none;
+    background: #3b82f6;
+    color: white;
+    cursor: pointer;
 }}
 
-{extra_css}
+button:hover {{
+    background: #2563eb;
+}}
+
+.CRITICAL {{ color: #ff2b2b; font-weight: bold; }}
+.HIGH {{ color: #ff8800; }}
+.ELEVATED {{ color: #ffaa00; }}
+.LOW {{ color: #22c55e; }}
+.NONE {{ color: #94a3b8; }}
+
+small {{
+    color: #94a3b8;
+}}
 
 </style>
-
-{extra_head}
-
 </head>
-
 <body>
 
-{nav_html(active=active)}
+<nav>
+{nav_link("Home", "/", "home")}
+{nav_link("Sessions", "/ui/sessions", "sessions")}
+{nav_link("Alerts", "/ui/alerts", "alerts")}
+{nav_link("Dashboard", "/ui/dashboard", "dashboard")}
+{nav_link("Active", "/ui/active", "active")}
+</nav>
 
-{body_html}
+{body}
 
 </body>
 </html>
