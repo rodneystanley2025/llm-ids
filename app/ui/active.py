@@ -1,62 +1,32 @@
-# Active Feed Page
-from typing import List, Dict, Any
-
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 from app.alerts.store import list_active_alerts
 from app.ui.layout import page_html
 
-
 router = APIRouter()
 
 
-def esc(s: str):
-
-    return (
-        (s or "")
-        .replace("&","&amp;")
-        .replace("<","&lt;")
-        .replace(">","&gt;")
-    )
-
-
 @router.get("/ui/active", response_class=HTMLResponse)
-def ui_active(window_seconds: int = 3600):
+def ui_active():
 
-    alerts: List[Dict[str,Any]] = list_active_alerts(
-        window_seconds=window_seconds
-    )
+    alerts = list_active_alerts(3600)
 
     rows = []
 
     for a in alerts:
 
-        sid = a.get("session_id","")
-
-        sev = a.get("severity","NONE")
-
-        rows.append(
-f"""
+        rows.append(f"""
 <tr>
-
-<td><code>{esc(sid)}</code></td>
-
-<td>{esc(sev)}</td>
-
-<td>
-
-<a href="/ui/dashboard">Dashboard</a>
-
-</td>
-
+<td><code>{a.get("session_id")}</code></td>
+<td>{a.get("severity")}</td>
+<td>{a.get("score")}</td>
+<td>{round((a.get("confidence") or 0)*100)}%</td>
 </tr>
-"""
-        )
+""")
 
-    body = f"""
-
-<h2>Active Alerts Feed</h2>
+    body=f"""
+<h2>Active Alerts (Last Hour)</h2>
 
 <div class="card">
 
@@ -65,20 +35,17 @@ f"""
 <thead>
 
 <tr>
-
 <th>Session</th>
-
 <th>Severity</th>
-
-<th>Links</th>
-
+<th>Score</th>
+<th>Confidence</th>
 </tr>
 
 </thead>
 
 <tbody>
 
-{''.join(rows) if rows else '<tr><td colspan=3>No active alerts</td></tr>'}
+{''.join(rows) if rows else '<tr><td colspan=4>No Active Alerts</td></tr>'}
 
 </tbody>
 
@@ -88,7 +55,7 @@ f"""
 """
 
     return page_html(
-        "Active Feed",
+        "Active Alerts",
         body,
         active="active",
     )

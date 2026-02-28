@@ -1,34 +1,89 @@
-import hashlib
-import time
+from __future__ import annotations
 
-from app.storage.db import insert_alert
+from typing import Dict, Any
+from datetime import datetime, timezone
 
-ALERT_COOLDOWN_SECONDS = 60
-_last_alert_cache = {}
+from app.alerts.store import (
+    insert_alert,
+    list_alerts,
+)
 
-def maybe_emit_alert(session_id: str, result: dict):
 
-    if not result.get("labels"):
+# ---------------------------------------------------------
+# CONFIDENCE ENGINE
+# ---------------------------------------------------------
+def compute_confidence(result: Dict[str, Any]) -> float:
+
+    score = int(result.get("score", 0))
+    severity = result.get("severity", "NONE")
+
+    base = min(score / 100.0, 1.0)
+
+    multiplier = {
+        "NONE": 0.0,
+        "LOW": 0.6,
+        "MEDIUM": 0.8,
+        "HIGH": 1.0,
+        "CRITICAL": 1.2,
+    }.get(severity, 0.5)
+
+    confidence = base * multiplier
+
+    return round(min(confidence, 1.0), 3)
+
+
+# ---------------------------------------------------------
+# DEDUPLICATION
+# ---------------------------------------------------------
+def is_duplicate(session_id: str, label: str) -> bool:
+
+    existing = list_alerts(500)
+
+    for a in existing:
+
+        if a.get("session_id") != session_id:
+            continue
+
+        stored = a.get("labels") or ""
+
+        if label in stored:
+            return True
+
+    return False
+
+
+# ---------------------------------------------------------
+# ALERT EMIT
+# ---------------------------------------------------------
+def maybe_emit_alert(session_id: str, result: Dict[str, Any]):
+
+    severity = result.get("severity")
+
+    if severity in (None, "NONE"):
         return
 
-    fingerprint = hashlib.sha256(
-        (session_id + str(result.get("labels"))).encode()
-    ).hexdigest()
+    labels = result.get("labels") or []
 
-    now = time.time()
-    last = _last_alert_cache.get(fingerprint)
+    if not labels:
+        return
 
-    if last and now - last < ALERT_COOLDOWN_SECONDS:
-        return  # suppress duplicate
+    confidence = compute_confidence(result)
 
-    _last_alert_cache[fingerprint] = now
+    ts = datetime.now(timezone.utc)\
+        .isoformat()\
+        .replace("+00:00", "Z")
 
-    insert_alert(
-        session_id=session_id,
-        ts=result.get("score"),
-        alert_type="RULE_TRIGGER",
-        severity=result.get("severity"),
-        confidence=result.get("confidence"),
-        reasons=result.get("labels"),
-        evidence=result.get("evidence"),
-    )
+    for label in labels:
+
+        if is_duplicate(session_id, label):
+            continue
+
+        insert_alert(
+            session_id=session_id,
+            ts=ts,
+            alert_type=label,
+            severity=severity,
+            score=int(result.get("score", 0)),
+            confidence=confidence,
+            evidence=result.get("evidence", {}),
+        )
