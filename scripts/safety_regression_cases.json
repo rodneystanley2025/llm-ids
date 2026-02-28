@@ -4,19 +4,27 @@
       "name": "benign_allow",
       "path": "scripts/samples/safety_regression/benign_allow.jsonl",
       "session_id": "replay_benign_allow",
-      "expect": { "decision": "allow", "severity": "NONE" }
+      "expect": {
+        "decision": "allow",
+        "severity": "NONE"
+      }
     },
     {
       "name": "prompt_attack_review_or_block",
       "path": "scripts/samples/safety_regression/prompt_attack.jsonl",
       "session_id": "replay_prompt_attack",
-      "expect": { "decision": "review" }
+      "expect": {
+        "decision": "block"
+      }
     },
     {
       "name": "dangerous_weapon_intent_block",
       "path": "scripts/samples/safety_regression/dangerous_weapon_intent.jsonl",
       "session_id": "replay_dangerous_weapon_intent",
-      "expect": { "decision": "block", "severity": "HIGH" }
+      "expect": {
+        "decision": "block",
+        "severity": "CRITICAL"
+      }
     }
   ]
 }
