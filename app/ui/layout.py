@@ -1,106 +1,189 @@
+from __future__ import annotations
+
 from typing import Optional
 
-def page_html(title: str, body: str, active: Optional[str] = None) -> str:
 
-    def nav_link(name: str, href: str, key: str):
-        cls = "active" if active == key else ""
-        return f'<a class="{cls}" href="{href}">{name}</a>'
+# ---------------------------------------------------------
+# MAIN PAGE WRAPPER
+# ---------------------------------------------------------
 
+def page_html(
+    title: str,
+    body: str,
+    active: Optional[str] = None,
+    request=None,
+) -> str:
+
+    # ---------------------------------------------
+    # Flash / Toast Message Support
+    # ---------------------------------------------
+    toast_html = ""
+
+    if request is not None:
+        try:
+            msg = request.query_params.get("msg")
+            if msg:
+                toast_html = f"""
+                <div id="toast">
+                    {msg}
+                </div>
+                <script>
+                setTimeout(() => {{
+                    const t=document.getElementById("toast");
+                    if(t) t.style.opacity="0";
+                }},3000);
+                </script>
+                """
+        except Exception:
+            pass
+
+    # ---------------------------------------------
+    # Active Nav Helper
+    # ---------------------------------------------
+    def nav(name: str) -> str:
+        return "active" if active == name else ""
+
+    # ---------------------------------------------
+    # PAGE HTML
+    # ---------------------------------------------
     return f"""
 <!DOCTYPE html>
 <html>
 <head>
+
 <meta charset="utf-8">
+
 <title>{title}</title>
+
 <style>
+
 body {{
-    font-family: Arial, sans-serif;
-    margin: 0;
-    background: #0f172a;
-    color: #e2e8f0;
+    margin:0;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    background:#0e1117;
+    color:#e6edf3;
 }}
 
-nav {{
-    background: #1e293b;
-    padding: 14px;
+.navbar {{
+    background:#161b22;
+    padding:14px 20px;
+    border-bottom:1px solid #30363d;
 }}
 
-nav a {{
-    color: #94a3b8;
-    margin-right: 18px;
-    text-decoration: none;
-    font-weight: 600;
+.navbar a {{
+    color:#8b949e;
+    text-decoration:none;
+    margin-right:18px;
+    font-weight:500;
 }}
 
-nav a.active {{
-    color: white;
+.navbar a.active {{
+    color:#58a6ff;
+}}
+
+.container {{
+    padding:22px;
 }}
 
 .card {{
-    background: #1e293b;
-    padding: 16px;
-    margin: 16px;
-    border-radius: 8px;
+    background:#161b22;
+    border:1px solid #30363d;
+    padding:18px;
+    margin-bottom:16px;
+    border-radius:8px;
 }}
 
 table {{
-    width: 100%;
-    border-collapse: collapse;
+    width:100%;
+    border-collapse:collapse;
 }}
 
-th, td {{
-    padding: 8px;
-    border-bottom: 1px solid #334155;
+th,td {{
+    border-bottom:1px solid #30363d;
+    padding:10px;
+    text-align:left;
 }}
 
 th {{
-    text-align: left;
+    color:#8b949e;
 }}
 
 pre {{
-    background: #0f172a;
-    padding: 8px;
-    border-radius: 6px;
-    overflow-x: auto;
+    white-space:pre-wrap;
 }}
 
 button {{
-    padding: 8px 12px;
-    border-radius: 6px;
-    border: none;
-    background: #3b82f6;
-    color: white;
-    cursor: pointer;
+    background:#238636;
+    border:none;
+    padding:10px 14px;
+    color:white;
+    border-radius:6px;
+    cursor:pointer;
 }}
 
 button:hover {{
-    background: #2563eb;
+    background:#2ea043;
 }}
 
-.CRITICAL {{ color: #ff2b2b; font-weight: bold; }}
-.HIGH {{ color: #ff8800; }}
-.ELEVATED {{ color: #ffaa00; }}
-.LOW {{ color: #22c55e; }}
-.NONE {{ color: #94a3b8; }}
+textarea,input {{
+    background:#0d1117;
+    color:#e6edf3;
+    border:1px solid #30363d;
+    border-radius:6px;
+}}
 
-small {{
-    color: #94a3b8;
+code {{
+    background:#0d1117;
+    padding:3px 6px;
+    border-radius:6px;
+}}
+
+h2 {{
+    margin-top:0;
+}}
+
+#toast {{
+    position:fixed;
+    right:20px;
+    top:20px;
+    background:#238636;
+    padding:14px 18px;
+    border-radius:8px;
+    color:white;
+    box-shadow:0 6px 20px rgba(0,0,0,.4);
+    z-index:9999;
+    transition:opacity .4s ease;
 }}
 
 </style>
+
 </head>
+
 <body>
 
-<nav>
-{nav_link("Home", "/", "home")}
-{nav_link("Sessions", "/ui/sessions", "sessions")}
-{nav_link("Alerts", "/ui/alerts", "alerts")}
-{nav_link("Dashboard", "/ui/dashboard", "dashboard")}
-{nav_link("Active", "/ui/active", "active")}
-</nav>
+<div class="navbar">
+
+<a class="{nav('dashboard')}" href="/ui/dashboard">Dashboard</a>
+
+<a class="{nav('sessions')}" href="/ui/sessions">Sessions</a>
+
+<a class="{nav('active')}" href="/ui/active">Active</a>
+
+<a class="{nav('alerts')}" href="/ui/alerts">Alerts</a>
+
+<a class="{nav('home')}" href="/">Home</a>
+
+</div>
+
+<div class="container">
+
+{toast_html}
 
 {body}
 
+</div>
+
 </body>
+
 </html>
 """
